@@ -485,14 +485,20 @@ def cmd_ablate_repair(cfg: dict, args) -> None:
     )
     
     print(repair_ablation.format_repair_ablations(results))
-    
+    print(repair_ablation.format_v2t_diagnostics(results, config="full"))
+
     out = p["outputs"] / "repair_ablations.json"
     out.write_text(json.dumps(results, indent=2, default=float), encoding="utf-8")
     print(f"\nwrote {out}")
-    
+
     out_csv = p["outputs"] / "repair_ablations_summary.csv"
     repair_ablation.save_repair_ablations_csv(results, out_csv)
     print(f"wrote {out_csv}")
+
+    diag_csv = p["outputs"] / "v2t_estimator_diagnostics.csv"
+    repair_ablation.save_v2t_diagnostics_csv(results, diag_csv)
+    if (results.get("_v2t_cases") or []):
+        print(f"wrote {diag_csv}")
 
 
 def cmd_repair(cfg: dict, args) -> None:

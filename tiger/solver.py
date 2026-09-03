@@ -117,6 +117,16 @@ class RepairPlan:
     cost: float = 0.0                    # edit cost (fields changed / tier weight)
     plannable: bool = True
     notes: str = ""
+    # --- V2T estimator attribution (diagnostics only; no effect on behaviour) ---
+    # Restoration accuracy is determined by which value the operator writes, not
+    # by which field the Arbiter routed to. These record both candidate
+    # estimators and which one supplied the value, so operator error can be
+    # attributed to the pixel path or the CLIP path independently of routing.
+    value_source: str = ""               # "pixel" | "probe" | ""
+    pixel_value: str = ""                # HSV dominant-colour estimate
+    pixel_conf: float | None = None      # winning colour's pixel share (NOT calibrated)
+    probe_value: str = ""                # CLIP per-field probe argmax
+    estimators_agree: bool | None = None # pixel == probe (both non-empty)
 
     def to_dict(self) -> dict:
         return self.__dict__.copy()
@@ -151,15 +161,34 @@ class CandidatePool:
         return j, float(sims[j])
 
 
-def _corrected_value(field: str, ev: dict) -> str:
-    """The image-supported replacement value for a suspect text field."""
+def _corrected_value(field: str, ev: dict) -> tuple[str, dict]:
+    """The image-supported replacement value for a suspect text field.
+
+    Returns ``(value, diagnostics)``. The chosen value is unchanged from the
+    original single-return behaviour; the diagnostics additionally record the
+    losing estimator so that operator accuracy can be decomposed after a run
+    (see RepairPlan's estimator-attribution fields).
+    """
+    probe_value = str((ev.get("probes") or {}).get(field, {}).get("pred", "") or "")
+    pixel_value, pixel_conf = "", None
+
     if field == "color":
-        # deterministic pixel estimate wins when confident; else CLIP probe
         pc = ev.get("pixel_color")
         conf = ev.get("pixel_color_confidence")
-        if pc and pc not in ("unknown", "multicolour") and conf is not None and conf >= 0.55:
-            return pc
-    return str((ev.get("probes") or {}).get(field, {}).get("pred", "") or "")
+        pixel_value = str(pc or "")
+        pixel_conf = float(conf) if conf is not None else None
+
+    agree = bool(pixel_value and probe_value and pixel_value == probe_value)
+    diag = {"pixel_value": pixel_value, "pixel_conf": pixel_conf,
+            "probe_value": probe_value, "estimators_agree": agree}
+
+    # deterministic pixel estimate wins when confident; else CLIP probe
+    if (field == "color" and pixel_value
+            and pixel_value not in ("unknown", "multicolour")
+            and pixel_conf is not None and pixel_conf >= 0.55):
+        return pixel_value, {**diag, "value_source": "pixel"}
+
+    return probe_value, {**diag, "value_source": "probe"}
 
 
 def plan_repair(ev: dict, route, sieve_row: dict, pool: CandidatePool,
@@ -181,13 +210,14 @@ def plan_repair(ev: dict, route, sieve_row: dict, pool: CandidatePool,
             if z is not None and z <= -2.0 and f not in suspects:
                 suspects.append(f)
         for f in suspects:
-            val = _corrected_value(f, ev)
+            val, diag = _corrected_value(f, ev)
             if not val or not schema.in_domain(f, val):
                 continue
             if schema.normalize(f, val) == (schema.normalize(f, attrs.get(f, "")) if attrs.get(f) else ""):
                 continue  # no-op; the image already agrees with the text
             return RepairPlan(row_id, "V2T", patch={f: val}, cost=1.0,
-                              notes=f"V2T single-field patch {f}={val} (suspect via LOO/probe)")
+                              notes=f"V2T single-field patch {f}={val} (suspect via LOO/probe)",
+                              **diag)
         return RepairPlan(row_id, "V2T", plannable=False,
                           notes="no valid single-field patch from evidence")
 

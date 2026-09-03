@@ -141,6 +141,11 @@ def run_repair_cycle(working: pd.DataFrame, encoder: ClipEncoder, schema: Schema
                 verdict = verify_mod.verify_repair(row_id, category, pr.attrs, c_before, c_after,
                                                    tau, eps, schema, independent_ok=indep)
                 entry = {"pass": pass_i, "direction": "V2T", "patch": plan.patch,
+                         "value_source": plan.value_source,
+                         "pixel_value": plan.pixel_value,
+                         "pixel_conf": plan.pixel_conf,
+                         "probe_value": plan.probe_value,
+                         "estimators_agree": plan.estimators_agree,
                          "verdict": verdict.to_dict()}
                 if verdict.accepted:
                     working.loc[working["row_id"].astype(str) == row_id,
