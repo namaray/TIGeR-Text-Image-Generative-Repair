@@ -185,11 +185,14 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
     v2t_cases += _c
 
     # Config 5: No Gamma Gate (Set gamma threshold to 0.0 so everything passes)
+    #
+    # arbiter.route() reads cfg["arbiter"]["gamma"] (tiger/arbiter.py:197). This
+    # previously wrote cfg["fusion"]["gamma"], a key nothing reads and which does
+    # not exist in configs/tiger.yaml, so the ablation ran the identical
+    # configuration as Full System -- which is why the two rows matched exactly.
     print("5/5: Running 'No Gamma Gate (Accept All Routes)'...")
     cfg_no_gamma = copy.deepcopy(cfg)
-    if "fusion" not in cfg_no_gamma:
-        cfg_no_gamma["fusion"] = {}
-    cfg_no_gamma["fusion"]["gamma"] = 0.0
+    cfg_no_gamma.setdefault("arbiter", {})["gamma"] = 0.0
     rep_no_gamma, rep_no_gamma_report = repair_mod.run_repair_cycle(
         noisy_sample, enc, schema, thr, loo_stats, vcal, trained_model, cfg_no_gamma, root,
         max_passes=2, independent=vlm_judge, generator=generator)
