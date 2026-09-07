@@ -711,12 +711,18 @@ returns 17 raw entries of which 5 are semantic duplicates.
   product can lose its declared value to its own alias and fire a false
   `flag_probe_color`.
 - Any comparison of a raw domain value against a normalised one breaks — D6, D7.
+- **Found while fixing:** `synthgen` and the noise injector draw colours from
+  this list (`synthgen.py:201`, `noise.py:94`) and `COLOR_RGB` has no entry for
+  the five. `python -m tiger.cli synthgen` raised `KeyError` on ~79 of 240
+  products. **This is why `data/sample/` cannot be regenerated** (C5/E6) — the
+  bundled catalogue has been unbuildable since the ABO schema edit. Fixed as a
+  consequence; a test now asserts every domain colour is renderable.
 
 **Fix:** keep the ABO colours in `aliases` only, or in `values` only with the
 alias removed. Then assert `set(values) ∩ set(aliases) == ∅` at schema load so it
 cannot recur.
 
-**Status:** TODO
+**Status:** DONE — `03d0546`; load_schema now refuses a reintroduced clash.
 
 ---
 
@@ -740,7 +746,7 @@ Verifier ablation measures.
 **Fix:** `return self.schema.normalize(field, pred) == self.schema.normalize(field, value)`.
 **Requires D5** to remove the duplicate candidates as well.
 
-**Status:** TODO
+**Status:** DONE — `ff54b41`.
 
 ---
 
@@ -754,7 +760,7 @@ reports at precision 1.000.
 
 **Fix:** normalise `_title_color`'s return value. **Requires D5.**
 
-**Status:** TODO
+**Status:** DONE — `d6ecadd`.
 
 ---
 
@@ -1051,26 +1057,33 @@ verified value is 0.983 (59/60), with `swap_image_same_category` as the separate
 | A. Measurement correctness | 9 | 8 | A2 (partial) | — |
 | B. Repair accuracy | 8 | 1 | B3, B7 | B1, B2, B5 blocked on data · B4 blocked on B0 · **B6 parked ⚑** |
 | C. Config & reproducibility | 8 | 2 | C1, C2, C4, C5, C6, C7 | — |
-| D. Robustness & design | 13 | 0 | D1, D2, D5–D13 | **D4 parked ⚑** · D3 withdrawn |
+| D. Robustness & design | 13 | 3 | D1, D2, D8–D13 | **D4 parked ⚑** · D3 withdrawn |
 | E. Documentation | 12 | 0 | E1, E2, E4–E12 | E3 blocked on A1 |
-| **Total** | **50** | **11** | **31** | 2 parked · 4 blocked · 1 withdrawn |
+| **Total** | **50** | **14** | **28** | 2 parked · 4 blocked · 1 withdrawn |
 
 **Section A is closed** apart from A2's model pin, which needs a live API key.
 The measurement instrument is now trustworthy, so B and the remaining sections
 can be measured against a baseline that means something.
 
-**Test suite: 101 passing** (73 restored by C3, 28 added by the fixes above).
+**Test suite: 114 passing** (73 restored by C3, 28 added by the fixes above).
 Every fix in this pass was verified against it; none changed behaviour the
 suite did not already pin.
 
 **Done in this pass:** `C3` → `A4` → `A1` → `A3`/`A3b` → `A5` → `A6` → `A8` →
 `A7` → `A2` (partial) → `C8`. Section A is closed bar A2's model pin.
 
-**Next action:** `D5 → D6/D7` (the alias collisions — they change pipeline
-behaviour, so they belong before the baseline run) → re-run `ablate-repair` with
-B0 instrumentation active → read the estimator attribution report → that report
-decides whether `B7` (encoder path) is worth pursuing while B1/B2 remain blocked
-on data.
+**Next action:** the pre-baseline set is now complete — `A4`, `A1`, `A3`/`A3b`,
+`A5`, `A6`, `A8`, `A7`, `D5`, `D6`, `D7` have all landed, and `synthgen` builds
+again. Run, in order:
+
+```bash
+python -m tiger.cli synthgen && python -m tiger.cli calibrate
+python -m tiger.cli train-arbiter && python -m tiger.cli calibrate-fusion
+python -m tiger.cli ablate-repair --independent --generative-fallback
+```
+
+Then read the B0 estimator attribution report: it decides whether `B7` (encoder
+path) is worth pursuing while B1/B2 stay blocked on data.
 
 Then the numbers move, and `E2`, `E3`, `E8` and the ⚑ decisions can be settled
 against figures that mean something. Everything in `E` should wait for that run;
