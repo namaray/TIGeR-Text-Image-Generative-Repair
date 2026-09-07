@@ -26,19 +26,44 @@ from tiger.schema import Schema
 
 
 class DummyArbiter(arbiter_mod.ArbiterModel):
-    """A dummy arbiter that routes randomly, simulating the absence of a trained classifier."""
+    """Routes at random: the "no trained classifier" baseline.
+
+    Two defects made the original neither random nor reproducible (A3, A3b):
+
+      - it emitted an "E4" key. E4 is not a predicted class -- it is the state
+        the gamma gate assigns (arbiter.CLASSES is E1/E2/E3/CLEAN). When E4 won
+        the argmax, route() matched neither CLEAN nor E1, fell through to the
+        final return, and was relabelled E3/BOTH. Those routes were not random,
+        they were systematically pushed toward image swaps.
+      - it hardcoded "CLEAN": 0.0, so the baseline could never dismiss a row.
+        A router that cannot choose one of the four available outcomes is not a
+        uniform baseline over the outcome space.
+      - it drew from the global `random` module with no seed, so the row changed
+        between runs and could not be reproduced for the paper.
+
+    Now: a Dirichlet-flat draw over the four real classes from an instance-owned
+    RNG, seeded from config so the seed travels with the run.
+    """
+
+    def __init__(self, *args, seed: int = 42, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._rng = random.Random(seed)
+        self.training_meta = dict(self.training_meta or {})
+        self.training_meta["dummy_arbiter_seed"] = seed
+
     def predict_proba(self, x: np.ndarray) -> dict[str, float]:
-        import random
-        # Randomly assign probabilities to E1, E2, E3, E4
-        probs = [random.random() for _ in range(4)]
-        total = sum(probs)
-        return {
-            "E1": probs[0] / total,
-            "E2": probs[1] / total,
-            "E3": probs[2] / total,
-            "E4": probs[3] / total,
-            "CLEAN": 0.0
-        }
+        draws = [self._rng.random() for _ in arbiter_mod.CLASSES]
+        total = sum(draws) or 1.0
+        return {c: d / total for c, d in zip(arbiter_mod.CLASSES, draws)}
+
+    def to_json(self) -> str:
+        # ArbiterModel.to_json serialises self.__dict__, which here holds a
+        # random.Random. A baseline router is never a persisted artifact, so
+        # fail loudly rather than emit something that cannot be loaded back.
+        raise NotImplementedError(
+            "DummyArbiter is an evaluation baseline and is not serialisable; "
+            "persist the trained ArbiterModel instead."
+        )
 
 
 def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schema,
@@ -160,7 +185,8 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
     dummy_model = DummyArbiter(
         feature_names=trained_model.feature_names, classes=trained_model.classes,
         mean=trained_model.mean, scale=trained_model.scale, coef=trained_model.coef,
-        intercept=trained_model.intercept
+        intercept=trained_model.intercept,
+        seed=int(cfg_no_arbiter.get("eval", {}).get("random_baseline_seed", 42)),
     )
     rep_no_arb, rep_no_arb_report = repair_mod.run_repair_cycle(
         noisy_sample, enc, schema, thr, loo_stats, vcal, dummy_model, cfg_no_arbiter, root,
