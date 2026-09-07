@@ -97,7 +97,7 @@ rewritten after a corrected run.
 
 **Fix:** write to `cfg_no_gamma["arbiter"]["gamma"] = 0.0`. **Requires A4 first.**
 
-**Status:** TODO
+**Status:** DONE — `2d29713`; regression tests pin both directions.
 
 ---
 
@@ -125,7 +125,7 @@ repairs while printing one error line per call.
 **Also determine:** whether any number in `paper_assets/` came from a
 `--vlm-judge` run. If so it is unusable.
 
-**Status:** TODO
+**Status:** DOING — `53736e6` makes a misconfigured judge raise instead of veto. Pinning a verified model ID still needs a live key.
 
 ---
 
@@ -150,7 +150,7 @@ it is not a uniform random baseline over the real outcome space.
 **Fix:** sample over the four real classes `["E1","E2","E3","CLEAN"]`; drop the
 `E4` key; seed the RNG (see A3b).
 
-**Status:** TODO
+**Status:** DONE — `01c469a`.
 
 ---
 
@@ -164,7 +164,7 @@ every run and cannot be reproduced for the paper.
 **Fix:** hold a `random.Random(seed)` instance on the class; take the seed from
 config so it is recorded with the run.
 
-**Status:** TODO
+**Status:** DONE — `01c469a`; seed from `cfg["eval"]["random_baseline_seed"]`.
 
 ---
 
@@ -179,7 +179,7 @@ Correcting A1 without fixing this mutates every config at once.
 **Fix:** `import copy` → `copy.deepcopy(cfg)` at all three sites.
 **Land this before A1.**
 
-**Status:** TODO
+**Status:** DONE — `d6c4936`, landed before A1 as required.
 
 ---
 
@@ -203,7 +203,20 @@ Ground truth is built solely from colour rows. Consequences:
    originally-correct product?) — the audit log already records the swap.
 3. Rename the column to what it measures, and report N per metric.
 
-**Status:** TODO
+**Sweep finding — step 2 as written is unachievable.** `noise.swap_image`
+COPIES a donor path over the row's own (`tiger/data/noise.py:158-178`), leaving
+the row's true original referenced by no row; `CandidatePool` holds in-use paths
+only (`tiger/solver.py:135-141`). The original is absent from the pool *by
+design* — that is the F14 held-out protocol applied to the operator. Scoring
+recovery of it would report 0% forever.
+
+Implemented instead: a T2V repair counts as restored when the image it installs
+depicts a product matching this row's true category and colour
+(`image_provenance`). Generated images depict no catalogue product and count as
+attempts but never successes — the conservative reading. Steps 1 and 3 landed
+as specified.
+
+**Status:** DONE — `804ed68`, with one deviation; see the sweep note above.
 
 ---
 
@@ -234,7 +247,7 @@ schema-driven per domain; echo the effective policy into the run output.
 **Land with A1, before the corrected ABO re-run** — otherwise the new numbers get
 read the same wrong way.
 
-**Status:** TODO
+**Status:** DONE — `a989d10`.
 
 ---
 
@@ -255,7 +268,7 @@ exists, behind an explicit flag, and state per reported number which operating
 point produced it. Note fusion trades recall for precision (mutate_text recall
 0.853 → 0.773), so enabling it changes what reaches the repair stage.
 
-**Status:** TODO
+**Status:** DONE — `2d0690c`; opt-in via `--fusion`.
 
 ---
 
@@ -277,7 +290,7 @@ identifies the error it names" — which is what the precision-floor claim needs
 number stays meaningful for OR-fusion; the per-signal number is the one the
 paper's claim rests on.
 
-**Status:** TODO
+**Status:** DONE — `233ba2d`.
 
 ---
 
@@ -509,7 +522,7 @@ or remove the pytest config and drop the claim. Do not leave it declared-but-emp
 Also delete the surviving "✅ Unit tests written" line in
 `paper_assets/tiger_project_doc.md` §11, which `f050639` missed (see E6).
 
-**Status:** TODO
+**Status:** DONE — `62373dc`; 73 restored, all passing. Suite now at 101.
 
 ---
 
@@ -585,7 +598,7 @@ a different order on identical inputs.
 
 **Fix:** `for row_id in sorted(active_ids):`
 
-**Status:** TODO
+**Status:** DONE — `d1f22c3`.
 
 ---
 
@@ -1033,27 +1046,35 @@ verified value is 0.983 (59/60), with `swap_image_same_category` as the separate
 
 ## Summary
 
-| Section | Items | Actionable | Parked / blocked / withdrawn |
-|---|---|---|---|
-| A. Measurement correctness | 9 | 9 | — |
-| B. Repair accuracy | 8 | 3 | B0 done · B1, B2, B5 blocked on data · B4 blocked on B0 · **B6 parked ⚑** |
-| C. Config & reproducibility | 8 | 8 | — |
-| D. Robustness & design | 13 | 11 | **D4 parked ⚑** · D3 withdrawn |
-| E. Documentation | 12 | 11 | E3 blocked on A1 |
-| **Total** | **50** | **42** | 2 parked · 4 blocked · 1 withdrawn · 1 done |
+| Section | Items | Done | Open | Parked / blocked / withdrawn |
+|---|---|---|---|---|
+| A. Measurement correctness | 9 | 8 | A2 (partial) | — |
+| B. Repair accuracy | 8 | 1 | B3, B7 | B1, B2, B5 blocked on data · B4 blocked on B0 · **B6 parked ⚑** |
+| C. Config & reproducibility | 8 | 2 | C1, C2, C4, C5, C6, C7 | — |
+| D. Robustness & design | 13 | 0 | D1, D2, D5–D13 | **D4 parked ⚑** · D3 withdrawn |
+| E. Documentation | 12 | 0 | E1, E2, E4–E12 | E3 blocked on A1 |
+| **Total** | **50** | **11** | **31** | 2 parked · 4 blocked · 1 withdrawn |
 
-**Next action:** `C3` (restore the 73-test suite — purely additive, and the
-instrument that proves the rest is architecture-preserving) → `A4` (deepcopy) →
-`A1` (gamma wiring) → `A3`/`A3b` (random baseline) → `A5` (scoring scope) →
-`A6` (T2V allowlist) → `D5 → D6/D7` (alias collisions) → re-run `ablate-repair`
-with B0 instrumentation active → read the estimator attribution report → that
-report decides whether B7 (encoder path) is worth pursuing while B1/B2 remain
-blocked on data.
+**Section A is closed** apart from A2's model pin, which needs a live API key.
+The measurement instrument is now trustworthy, so B and the remaining sections
+can be measured against a baseline that means something.
 
-C3 comes first because every fix after it needs a regression harness. A6 and D5
-join the pre-baseline set because they change what the pipeline *does*, not only
-what it *reports*: a baseline measured before them is not one the fixed system
-reproduces.
+**Test suite: 101 passing** (73 restored by C3, 28 added by the fixes above).
+Every fix in this pass was verified against it; none changed behaviour the
+suite did not already pin.
+
+**Done in this pass:** `C3` → `A4` → `A1` → `A3`/`A3b` → `A5` → `A6` → `A8` →
+`A7` → `A2` (partial) → `C8`. Section A is closed bar A2's model pin.
+
+**Next action:** `D5 → D6/D7` (the alias collisions — they change pipeline
+behaviour, so they belong before the baseline run) → re-run `ablate-repair` with
+B0 instrumentation active → read the estimator attribution report → that report
+decides whether `B7` (encoder path) is worth pursuing while B1/B2 remain blocked
+on data.
+
+Then the numbers move, and `E2`, `E3`, `E8` and the ⚑ decisions can be settled
+against figures that mean something. Everything in `E` should wait for that run;
+the current values in `paper_assets/` are the ones this pass invalidated.
 
 `D4` and `B6` are **parked** — they are the two ⚑ design changes and are excluded
 from the fix pass by decision, not by oversight.
