@@ -156,11 +156,10 @@ def compute_signals(df: pd.DataFrame, encoder: ClipEncoder, schema: Schema,
 
     # ---------- image-independent text checks (3.5) ----------
     ood, contra = [], []
-    color_domain = schema.domain("color")
     for i, (cat, attrs, title) in enumerate(zip(df["category"].astype(str), attrs_list, titles)):
         ood.append(bool(schema.validate_attrs(cat, attrs)))
         brand = str(attrs.get("brand", ""))
-        title_color = _title_color(title, color_domain, brand)
+        title_color = _title_color(title, schema, brand)
         declared = schema.normalize("color", attrs.get("color", "")) if attrs.get("color") else ""
         contra.append(bool(title_color and declared and title_color != declared))
     df["flag_text_out_of_domain"] = ood
@@ -171,15 +170,25 @@ def compute_signals(df: pd.DataFrame, encoder: ClipEncoder, schema: Schema,
     return df, arrays
 
 
-def _title_color(title: str, colors: list[str], brand: str) -> str:
+def _title_color(title: str, schema: Schema, brand: str) -> str:
+    """First colour word in the title, NORMALISED, ignoring brand names (D7).
+
+    Scans surface forms rather than domain members, so "Navy Shirt" is
+    recognised even though `navy` is an alias. Returns the canonical value so the
+    caller can compare it against a normalised declared colour: returning the raw
+    match made "Navy Shirt" + color=navy read as a contradiction, because
+    "navy" != "blue".
+    """
     import re
 
     masked = (title or "").lower()
     if brand:
         masked = masked.replace(brand.lower(), " ")
-    for c in colors:
-        if c != "multicolour" and re.search(rf"\b{re.escape(c)}\b", masked):
-            return c
+    for form in schema.surface_forms("color"):
+        if schema.normalize("color", form) == "multicolour":
+            continue
+        if re.search(rf"\b{re.escape(form)}\b", masked):
+            return schema.normalize("color", form)
     return ""
 
 
