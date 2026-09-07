@@ -92,7 +92,9 @@ def run_repair_cycle(working: pd.DataFrame, encoder: ClipEncoder, schema: Schema
         idx_by_id = {str(r): i for i, r in enumerate(flagged["row_id"].astype(str))}
 
         any_committed = False
-        for row_id in active_ids:
+        # sorted: set iteration order varies per process under string hash
+        # randomisation, which made the provenance log non-reproducible (C8).
+        for row_id in sorted(active_ids):
             ev = ev_by_id.get(row_id)
             if ev is None:
                 continue
