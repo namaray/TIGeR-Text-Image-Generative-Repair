@@ -23,6 +23,21 @@ import numpy as np
 import pandas as pd
 
 
+# Which noise subtypes each probe field legitimately claims to detect (A8).
+# The colour probe answers "does the image show the declared colour?", so a
+# colour probe firing on a material_flip row is a coincidence, not a hit.
+# Image-side corruptions are included because a swapped image genuinely does
+# contradict the declared attribute -- the probe is right about that row.
+PROBE_TARGETS = {
+    "color": {"color_flip", "near_color_flip", "attribute_drop", "mixed_swap_color",
+              "swap_image", "swap_image_same_category", "missing_image"},
+    "material": {"material_flip", "mixed_swap_color",
+                 "swap_image", "swap_image_same_category", "missing_image"},
+    "pattern": {"mixed_swap_color",
+                "swap_image", "swap_image_same_category", "missing_image"},
+}
+
+
 @dataclass
 class FusionConfig:
     per_signal: dict = field(default_factory=dict)  # signal -> {z_margin, quarantined, precision, fired}
@@ -49,13 +64,23 @@ def calibrate_fusion(labeled: pd.DataFrame, probe_fields: list[str],
                      zcol_fmt: str = "probe_{}_z") -> FusionConfig:
     """Tune each probe's z-margin to the smallest value meeting the precision floor.
 
-    `labeled` must carry `noise_label` and per-probe z columns. A row counts as a
-    true positive for a probe if it is dirty (noise_label != clean). Non-probe
-    signals (low_sim, text checks, missing) are measured and reported but not
-    swept here -- low_sim precision is governed by the locked tau, and the text
-    checks are near-deterministic.
+    `labeled` must carry `noise_label`, `noise_subtype` and per-probe z columns.
+
+    A row counts as a true positive for a probe when it is dirty AND its subtype
+    is one the probe claims (PROBE_TARGETS). Scoring against `dirty` alone -- the
+    previous behaviour -- certified "this signal fires on dirty rows", not "this
+    signal identifies the error it names", which is what the precision-floor
+    claim needs. Both figures are recorded: `precision` (on-target, enforced) and
+    `precision_any_dirty` (the older, looser number, for comparison). Without a
+    `noise_subtype` column the two coincide and behaviour is unchanged.
+
+    Non-probe signals (low_sim, text checks, missing) are measured and reported
+    but not swept here -- low_sim precision is governed by the locked tau, and
+    the text checks are near-deterministic.
     """
     dirty = (labeled["noise_label"].astype(str) != "clean")
+    subtypes = (labeled["noise_subtype"].astype(str)
+                if "noise_subtype" in labeled.columns else None)
     per_signal: dict[str, dict] = {}
 
     for fld in probe_fields:
@@ -63,25 +88,34 @@ def calibrate_fusion(labeled: pd.DataFrame, probe_fields: list[str],
         if zcol not in labeled.columns:
             continue
         z = labeled[zcol]
-        chosen = None
-        for zt in z_grid:
+
+        # A8: `dirty` counts a row as a hit when it is corrupted for ANY reason,
+        # so the material probe firing on a swap_image row scored as correct.
+        # `on_target` restricts credit to the subtypes this probe actually
+        # claims. The floor is enforced on the stricter figure; the looser one
+        # is still reported so the two can be compared.
+        on_target = dirty if subtypes is None else (
+            dirty & subtypes.isin(PROBE_TARGETS.get(fld, set())))
+
+        def _measure(zt: float) -> dict:
             fired = (~z.isna()) & (z <= -zt)
             n = int(fired.sum())
-            if n == 0:
-                continue
-            prec = float(dirty[fired].mean())
-            if prec >= precision_floor:
-                chosen = {"z_margin": float(zt), "quarantined": False,
-                          "precision": round(prec, 3), "fired": n}
+            return {
+                "z_margin": float(zt),
+                "fired": n,
+                "precision": round(float(on_target[fired].mean()), 3) if n else None,
+                "precision_any_dirty": round(float(dirty[fired].mean()), 3) if n else None,
+            }
+
+        chosen = None
+        for zt in z_grid:
+            m = _measure(zt)
+            if m["fired"] and m["precision"] is not None and m["precision"] >= precision_floor:
+                chosen = {**m, "quarantined": False}
                 break
         if chosen is None:
             # even the tightest margin misses the floor -> quarantine
-            zt = z_grid[-1]
-            fired = (~z.isna()) & (z <= -zt)
-            n = int(fired.sum())
-            prec = float(dirty[fired].mean()) if n else float("nan")
-            chosen = {"z_margin": float(zt), "quarantined": True,
-                      "precision": None if n == 0 else round(prec, 3), "fired": n}
+            chosen = {**_measure(z_grid[-1]), "quarantined": True}
         per_signal[f"flag_probe_{fld}"] = chosen
 
     # report-only precision for the non-swept signals
@@ -91,6 +125,7 @@ def calibrate_fusion(labeled: pd.DataFrame, probe_fields: list[str],
             n = int(fired.sum())
             per_signal.setdefault(sig, {})
             per_signal[sig].update({"precision": round(float(dirty[fired].mean()), 3) if n else None,
+                                    "precision_any_dirty": round(float(dirty[fired].mean()), 3) if n else None,
                                     "fired": n, "quarantined": False, "z_margin": None})
 
     return FusionConfig(
