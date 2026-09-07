@@ -4,6 +4,7 @@ Working document. One entry per defect, ordered so that fixes which *gate the
 measurement of other fixes* land first.
 
 **Status:** `TODO` · `DOING` · `DONE` · `BLOCKED`
+**Marker:** ⚑ = changes the design, not just the numbers (see the ⚑ table below)
 **Line references** are current as of branch `diagnostics/v2t-estimator-attribution`.
 
 ---
@@ -21,7 +22,38 @@ Two dependency traps:
    ablation harness. If the harness is broken, you cannot tell which B fix
    helped. Land A first, re-run once to get a trustworthy baseline, then start B.
 
-Expected sequence: `A4 → A1 → A2 → A3 → A5` → baseline run → `B0 (done) → B1…B6`.
+3. **D5 must land before D6 and D7.** Those two are the same normalisation
+   defect, and both exist because D5 put five colours into the domain *and* into
+   the alias map. Fixing the comparisons without fixing the domain leaves the
+   probe candidates colliding.
+
+Expected sequence: `A4 → A1 → A6 → A2 → A3 → A5`, plus `D4` and `D5 → D6/D7`
+→ baseline run → `B0 (done) → B1…B6`.
+
+`D4` and `D5` join the pre-baseline set because they change **pipeline
+behaviour**, not just measurement: the numbers taken before them are not the
+numbers the fixed system produces.
+
+---
+
+## ⚑ Three findings that change the design, not the numbers
+
+Everything else in this file is a defect against a sound design — fix it and the
+architecture stands. These three say the built system is not the described
+system. Each needs a **decision** before it needs a patch.
+
+| ⚑ | Finding | Entry | What it changes |
+|---|---|---|---|
+| **1** | The repair operator has no ground-truth source, and nothing abstains on *value* | `B6` (with `B1`–`B4`, `E2`, `D6`) | The γ-gate abstains on routing; Eq. 27–29 abstains on schema and similarity. Nothing abstains on *"I do not know what colour this is."* A wrong-but-in-domain value that raises CLIP similarity passes every gate and is committed — that is the ~9 of 19 in `E2`. `B6` is not an accuracy tweak, it is a missing stage. |
+| **2** | The closed loop is not closed, and E3 has no behaviour of its own | `D4` | Four taxonomy classes, three implemented behaviours. The re-route arrow in the README architecture diagram has never executed. |
+| **3** | Cross-domain generalisation was never tested for image repair | `A6` | RQ3's evidence covers V2T and escalation only — T2V was structurally disabled for the entire ABO run. |
+
+**Framing consequence.** What exists today is a *high-recall cross-modal error
+detector with a calibrated triage layer, and a repair operator that is the
+weakest component in the system.* That is a defensible paper on the committed
+artifacts. The repair paper needs `B1`/`B2`/`B6` first. `reviewer_defense.md`
+Attack 3 already reaches for the triage framing — it should be the accurate
+description, not the fallback argument.
 
 ---
 
@@ -150,6 +182,80 @@ Ground truth is built solely from colour rows. Consequences:
 
 ---
 
+### A6 ⚑ · The T2V policy allowlist disabled image repair for the whole ABO run
+**Severity:** Critical — a cross-domain claim rests on a path that never executed
+**Where:** `tiger/arbiter.py:242` reads · `configs/tiger.yaml:73` sets
+
+```python
+cat_ok = ev.get("category") in (policy.get("allowed_categories") or [ev.get("category")])
+if "T2V" not in allowed_dirs or not cat_ok:
+    return Route(..., "HUMAN", "human_review", 3, f"{top} but T2V blocked by policy/modality")
+```
+
+`allowed_categories` is `["shirts","shoes","bags","hats"]`. ABO imports map to
+`electronics / furniture / kitchen / home_decor` (`tiger/data/import_abo.py:33`).
+Every ABO E2 and E3 row was force-escalated by a fashion-only allowlist **before**
+schema validation or the gamma gate applied.
+
+**Consequence:** RQ3 — "does TIGeR generalise to a new vertical via lightweight
+schema adaptation?" — is unanswered for image repair. H10 blames the escalation
+rate on the `color` requirement and H11 on Arbiter underconfidence; this is a
+third cause, upstream of both, and unacknowledged in every document. It also
+interacts with A1: on ABO, correcting the gamma wiring still cannot move E2/E3
+outcomes while this gate is closed.
+
+**Fix:** extend `allowed_categories` to the ABO verticals, or make the policy
+schema-driven per domain; echo the effective policy into the run output.
+**Land with A1, before the corrected ABO re-run** — otherwise the new numbers get
+read the same wrong way.
+
+**Status:** TODO
+
+---
+
+### A7 · Precision-floor fusion is never loaded by the live pipeline
+**Severity:** High — the headline precision is not the operating point
+**Where:** `tiger/cli.py:195` (`cmd_detect`) · `tiger/repair.py:74` (`run_repair_cycle`)
+
+Both call `sieve_mod.apply_thresholds(sig, thr)` with no `fusion=` argument.
+`data/thresholds/tiger_fusion.json` is read by `cmd_ablate` and nothing else.
+
+**Consequence:** the advertised **P=0.888 / R=0.882 / F1=0.885** is an offline
+ablation row. `detect`, `analyze`, `route`, `repair` and every repair-side number
+run on the un-fused detector at **P=0.793 / R=0.924**. `tiger_project_doc.md` §4
+presents the fused figure as the Sieve's output.
+
+**Fix:** load the fusion config in `cmd_detect` and `run_repair_cycle` when it
+exists, behind an explicit flag, and state per reported number which operating
+point produced it. Note fusion trades recall for precision (mutate_text recall
+0.853 → 0.773), so enabling it changes what reaches the repair stage.
+
+**Status:** TODO
+
+---
+
+### A8 · The per-signal precision floor measures row dirtiness, not signal correctness
+**Severity:** Medium — the 0.85 floor is weaker than it reads
+**Where:** `tiger/fusion.py:72`
+
+```python
+prec = float(dirty[fired].mean())
+```
+
+A row counts as a true positive for a probe whenever the row is dirty **for any
+reason**. The material probe firing on a `swap_image` row scores as a hit. The
+floor therefore certifies "this signal fires on dirty rows", not "this signal
+identifies the error it names" — which is what the precision-floor claim needs.
+
+**Fix:** score each probe against the subtype it claims to detect
+(`noise_subtype` is already in the frame) and report both figures. The joint
+number stays meaningful for OR-fusion; the per-signal number is the one the
+paper's claim rests on.
+
+**Status:** TODO
+
+---
+
 ## B. Repair accuracy — the actual goal
 
 The architecture claims *"the image is ground truth; read the true value from
@@ -251,7 +357,7 @@ box and compounding B2.
 
 ---
 
-### B6 · The two estimators never cross-check
+### B6 ⚑ · The two estimators never cross-check
 **Severity:** High — this is the highest-value *architectural* fix
 **Where:** `tiger/solver.py:164`
 
@@ -264,6 +370,12 @@ into escalations, raising restoration accuracy on the acted-on set by trading
 coverage. Report as a **risk–coverage curve**, not a point — that is the
 standard form in the selective-prediction literature and makes the trade
 explicit rather than looking like threshold tuning.
+
+**⚑ Architectural.** This is the system's only possible abstention on *value*
+uncertainty. The γ-gate abstains on routing, Eq. 27–29 on schema and similarity;
+nothing today abstains on "I do not know what colour this is", so a wrong-but-
+in-domain value that raises CLIP similarity is committed silently (`E2`). Treat
+this as a missing pipeline stage between Solver and Verify, not a threshold tweak.
 
 B0's report already quantifies what this would buy before it is built.
 
@@ -340,6 +452,8 @@ fusion quarantine) — that was a genuine credibility asset.
 
 **Fix:** restore the suite from git history (`git show <pre-strip>:tests/...`),
 or remove the pytest config and drop the claim. Do not leave it declared-but-empty.
+Also delete the surviving "✅ Unit tests written" line in
+`paper_assets/tiger_project_doc.md` §11, which `f050639` missed (see E6).
 
 **Status:** TODO
 
@@ -366,6 +480,51 @@ Every number in `paper_assets/` traces to Kaggle CSVs that survive in no
 committed form. For a systems paper this is the reproducibility surface.
 
 **Fix:** commit the summary CSVs (not the caches) under `paper_assets/results/`.
+
+**Status:** TODO
+
+---
+
+### C6 · `requirements.txt` and `pyproject.toml` disagree
+**Severity:** Low
+**Where:** `requirements.txt` · `pyproject.toml:12-34`
+
+`requirements.txt` pins `opencv-python`, `tqdm`, `requests` and `torchvision` —
+none imported anywhere under `tiger/`. `matplotlib` is imported by
+`tiger/viz.py:2` and declared in neither file, so a clean `pip install -e ".[dev]"`
+cannot run `viz`.
+
+**Fix:** delete `requirements.txt` in favour of the extras (or regenerate it from
+them), and add a `viz` extra carrying `matplotlib`.
+
+**Status:** TODO
+
+---
+
+### C7 · A 73 MB AWS installer is sitting in the project root
+**Severity:** Low
+**Where:** `awscliv2.zip`, `aws/` (untracked but present)
+
+Alongside untracked `literature_review.md`, `related_work.tex`, `related_work.bib`
+and `papers/`. Nothing distinguishes scratch from deliverable.
+
+**Fix:** delete the installer and `aws/`; decide whether the literature files are
+tracked deliverables and either commit them or add them to `.gitignore` explicitly.
+
+**Status:** TODO
+
+---
+
+### C8 · Repair iterates a `set`, so the provenance log is not reproducible
+**Severity:** Low
+**Where:** `tiger/repair.py:95` — `for row_id in active_ids:`
+
+Python string hashing is randomised per process. Outcomes are unaffected (the
+pass reads `flagged` and `pool`, both fixed at pass start), but the provenance
+log — the audit artefact the roadmap cites for rollback under 4.3 — comes out in
+a different order on identical inputs.
+
+**Fix:** `for row_id in sorted(active_ids):`
 
 **Status:** TODO
 
@@ -417,6 +576,207 @@ a veto.
 
 ---
 
+### D4 ⚑ · The two-pass loop never runs, so E3 has no behaviour of its own
+**Severity:** High — a documented architectural edge that has never executed
+**Where:** `tiger/repair.py:84` (mask) · `tiger/solver.py:224` (plan) · `tiger/repair.py:162` (apply)
+
+```python
+active_mask = flagged["flagged"].astype(bool) & ~flagged["row_id"].astype(str).isin(
+    [rid for rid, oc in outcomes.items() if oc.final_status != "pending"])
+```
+
+An accepted repair sets `final_status = "repaired"` immediately, so pass 2
+excludes it; escalated rows are excluded too. Pass 2 has nothing to act on and
+`verify.max_passes: 2` is inert.
+
+Downstream of that: `route()` returns E3 → direction `BOTH`; `plan_repair`
+handles `("T2V","BOTH")` identically and returns a plan whose direction is
+`"T2V"`; `repair.py` applies T2V and stops. **E3 is operationally
+indistinguishable from E2** — the taxonomy has four classes and three behaviours.
+
+**Consequence:** the "image first, then re-diagnose text" behaviour described in
+`paper_concepts.md` §1, `tiger_project_doc.md` §9 and the E3 row of the taxonomy
+table has never run. The re-route arrow in the README architecture diagram is
+drawn but not wired. `mixed_swap_color` rows (2% of injected noise) get the image
+swapped and keep the wrong colour.
+
+**Fix:** pick a contract and implement it —
+1. keep accepted rows `pending` so they re-enter the next pass, terminating when
+   they are no longer flagged; or
+2. give `BOTH` an explicit two-step plan inside one pass: T2V, re-embed, then V2T
+   against the new image.
+
+Either changes results. **Land before the corrected baseline run**, not after.
+
+**Status:** TODO
+
+---
+
+### D5 · Five colours are in the domain *and* in the alias map
+**Severity:** High — root cause of D6 and D7; land first
+**Where:** `configs/schema.yaml:19-31`
+
+`silver, gold, beige, navy, teal` appear in `color.values` **and** in
+`color.aliases`, mapping to `gray, yellow, white, blue, green`. `Schema.in_domain`
+normalises both sides so membership still works, but `Schema.domain("color")`
+returns 17 raw entries of which 5 are semantic duplicates.
+
+**Consequences:**
+- Contrastive probes (`tiger/sieve.py:128`) build one caption per raw entry, so
+  "silver" and "gray" compete as separate candidates for the same pixels. A grey
+  product can lose its declared value to its own alias and fire a false
+  `flag_probe_color`.
+- Any comparison of a raw domain value against a normalised one breaks — D6, D7.
+
+**Fix:** keep the ABO colours in `aliases` only, or in `values` only with the
+alias removed. Then assert `set(values) ∩ set(aliases) == ∅` at schema load so it
+cannot recur.
+
+**Status:** TODO
+
+---
+
+### D6 · The independent verifier vetoes correct repairs on aliased colours
+**Severity:** High — silently suppresses good repairs, in the column carrying the +13.3% claim
+**Where:** `tiger/verify.py:174`
+
+```python
+pred = domain[int(np.argmax(np.stack(embs) @ img[0]))]   # raw domain value
+return pred == self.schema.normalize(field, value)        # normalised value
+```
+
+`pred` is raw (`"navy"`); the right-hand side is normalised (`"blue"`). Whenever
+the independent encoder's argmax lands on one of the five aliased colours,
+`check_v2t` returns `False` and the repair is vetoed as a semantic failure.
+
+**Consequence:** vetoes caused by this bug are indistinguishable in the results
+from genuine wrong-direction catches — the exact quantity the Independent
+Verifier ablation measures.
+
+**Fix:** `return self.schema.normalize(field, pred) == self.schema.normalize(field, value)`.
+**Requires D5** to remove the duplicate candidates as well.
+
+**Status:** TODO
+
+---
+
+### D7 · `_title_color` manufactures false title-contradiction flags
+**Severity:** Medium
+**Where:** `tiger/sieve.py:174` returns raw · `tiger/sieve.py:165` compares against normalised
+
+A "Navy Shirt" carrying `color: navy` yields `title_color="navy"`,
+`declared="blue"`, and fires `flag_title_contradiction` — a signal the ablation
+reports at precision 1.000.
+
+**Fix:** normalise `_title_color`'s return value. **Requires D5.**
+
+**Status:** TODO
+
+---
+
+### D8 · Category singularisation is fashion-only, so ABO captions are malformed
+**Severity:** Medium — a competing explanation for the H11 underconfidence finding
+**Where:** `tiger/text_views.py:23,35`
+
+`CATEGORY_SINGULAR` covers `shirts/shoes/bags/hats` only. ABO categories fall
+through to `rstrip("s")`, producing probe and LOO captions like *"a photo of a
+red home_decor"* and *"a photo of a red electronic"* — an underscore token and a
+non-noun, fed to CLIP as the whole prompt ensemble.
+
+**Consequence:** every ABO probe margin, LOO delta, and Arbiter feature derived
+from them was measured against a degraded prompt. H11 attributes ABO
+underconfidence entirely to covariate shift; this is a mechanical alternative
+that has not been ruled out.
+
+**Fix:** add the ABO categories with real nouns (`home_decor → "home decoration"`,
+`electronics → "electronic device"`), then re-run the confidence diagnostic
+before drawing any conclusion from it.
+
+**Status:** TODO
+
+---
+
+### D9 · `rstrip("s")` is the wrong primitive for singularisation
+**Severity:** Low
+**Where:** `tiger/text_views.py:35` · `tiger/generator.py:49`
+
+`rstrip` strips *every* trailing `s`: `"dress" → "dre"`, `"glasses" → "glasse"`.
+Harmless for the current four fashion categories, wrong for obvious next-vertical
+candidates.
+
+**Fix:** `removesuffix("s")`, or an explicit map with a fallback.
+
+**Status:** TODO
+
+---
+
+### D10 · The SDXL prompt drops pattern and material before generation
+**Severity:** Medium — a documented limitation is attributed to the wrong cause
+**Where:** `tiger/generator.py:49-55`
+
+```python
+subject = f"{color} {cat_singular}" if color and cat_singular else caption
+```
+
+Only colour and category reach the prompt. `pattern` and `material` are accepted
+as arguments and discarded.
+
+**Consequence:** `honest_limitations.md` §2 and `paper_draft_materials.md` §4 both
+explain the loss of "striped"/"printed" as diffusion models struggling with
+fine-grained pattern adherence. The pattern never enters the prompt. The
+limitation is real; the stated cause is a claim about SDXL that this code cannot
+support.
+
+**Fix:** include pattern and material in the prompt, regenerate the qualitative
+grid, and re-assess whether the limitation survives. Correct §2 and §4 either way.
+
+**Status:** TODO
+
+---
+
+### D11 · The Gemini prompt cache is keyed on full base64 images and is unbounded
+**Severity:** Medium
+**Where:** `tiger/vlm_judge.py:167` — `cache_key = json.dumps(parts, sort_keys=True)`
+
+`parts` contains the base64-encoded image, so every key is the size of the image
+and every image is retained for the process lifetime.
+`project_chronicle.md` Hiccup 2 describes this as "an in-memory LRU cache"; it is
+neither LRU nor bounded. On a 1,500-image run it holds the corpus twice.
+
+**Fix:** key on `sha1(image bytes) + sha1(prompt)`; bound it (`functools.lru_cache`
+or an explicit cap). Correct the chronicle's description of what was built.
+
+**Status:** TODO
+
+---
+
+### D12 · `repair` always reports zero flagged products
+**Severity:** Low
+**Where:** `tiger/cli.py:589` — `total = summary.get("total", 0)`
+
+`run_repair_cycle` emits `n_products`, `by_status` and `max_passes`. There is no
+`total` key, so the user-facing summary always reads *"We attempted to repair the
+0 flagged products."*
+
+**Fix:** use `n_products`, or sum `by_status`.
+
+**Status:** TODO
+
+---
+
+### D13 · Dead allocation in `encode_images`
+**Severity:** Trivial
+**Where:** `tiger/encoders.py:140-143`
+
+A conditional `np.zeros` whose result is unconditionally overwritten thirty lines
+later, with a comment already admitting it (`# simpler: resolve dim lazily below`).
+
+**Fix:** delete it.
+
+**Status:** TODO
+
+---
+
 ## E. Documentation contradicted by the code
 
 Fix **after** the corrected ablation run — the numbers will move.
@@ -456,16 +816,162 @@ Pairs with B7.
 
 ---
 
+### E6 · The docs route readers to six paths that do not exist
+**Severity:** Medium — first-contact credibility, and it is the reproducibility surface
+
+| Referenced | By | Reality |
+|---|---|---|
+| `data/sample/` "committed" | `README.md`, `tiger_project_doc.md` §2 | absent, untracked |
+| `data/thresholds/` "committed" | `README.md`, `tiger_project_doc.md` §2 | absent, untracked |
+| `scripts/` legacy MVP "kept for reference" | `README.md`, `tiger_project_doc.md` §2 | deleted |
+| `.github/workflows/ci.yml` | `ROADMAP_PROGRESS.md` 4.2 (marked ✅) | absent |
+| `kaggle_workflow.ipynb` "in the repository root" | `README.md:132`, `tiger_project_doc.md` §7 Option B | absent; the real notebooks are `tiger.ipynb` and `tiger_abo.ipynb` |
+| `[ROADMAP_PROGRESS.md](ROADMAP_PROGRESS.md)` | `README.md:17` | broken link; the file is in `paper_assets/` |
+
+The two directories advertised as committed are precisely the two that would make
+the repo reproducible. Pairs with C5.
+
+**Fix:** commit the sample catalogue and locked thresholds (both small), correct
+every path, drop the `scripts/` and `ci.yml` claims, and remove the surviving
+"✅ Unit tests written" line in `tiger_project_doc.md` §11 (C3).
+
+**Status:** TODO
+
+---
+
+### E7 · Three documents name three different final verifiers
+**Severity:** Medium
+
+`pipeline_architecture.md` §5 says "Gemini 3.7 Flash or Local SigLIP";
+`project_chronicle.md` §2 and `ROADMAP_PROGRESS.md` decision 6 say SigLIP was
+selected *over* Gemini; `README.md`'s end-to-end example is
+`repair --seed 7 --vlm-judge`, i.e. Gemini. The README's own worked example does
+not run the configuration the paper reports — and per A2 it currently cannot run
+at all. "Gemini 3.7 Flash" is not a real model.
+
+**Fix:** name SigLIP as the reported verifier everywhere, change the README
+example to `--independent`, and describe Gemini as an evaluated alternative.
+
+**Status:** TODO
+
+---
+
+### E8 · Ablation-table denominators move by 17 rows with no explanation
+**Severity:** Medium — a reviewer will subtract these
+**Where:** `paper_assets/paper_draft_materials.md` §1
+
+| Config | Repaired | Escalated | Sum |
+|---|---|---|---|
+| No Arbiter | 168 | 266 | 434 |
+| No Independent Verifier | 176 | 256 | 432 |
+| No Generative Fallback | 148 | 269 | **417** |
+| No Gamma Gate | 163 | 269 | 432 |
+| Full System | 163 | 269 | 432 |
+
+Same sample, five different totals. The cause is benign — `_evaluate_run`
+(`tiger/eval/repair_ablation.py:96`) reports only `repaired` and `escalated`,
+silently dropping `dismissed`, `acquire_image` and `unrepaired` — but the table
+presents the two columns as exhaustive.
+
+**Fix:** report all statuses, or add a `Total` column with a footnote. Regenerate
+after A1.
+
+**Status:** BLOCKED on A1
+
+---
+
+### E9 · The ablation credits LOO masking for the contrastive probes' result
+**Severity:** Medium — the paper mis-credits its own strongest contribution
+**Where:** `tiger/eval/ablation.py:91,140` · `paper_assets/paper_concepts.md` §2
+
+`CONFIGS["probes_only"]` is `flag_probe_{color,material,pattern}` and
+`CONFIGS["no_loo"]` is everything *except* those — both are the per-field
+contrastive probes. They print as "LOO Probes Only" and "No LOO Masking", and the
+takeaway line reads "Adding LOO Masking: +X F1".
+
+Eq. 18 leave-one-out lives in `tiger/analyzer.py` and runs only on already-flagged
+rows. **It contributes nothing to detection.** The mechanism that produces the
+project's strongest verified result — mutate_text recall 0.267 → 0.853 — is the
+contrastive probes. `paper_concepts.md` §2 presents LOO masking as the headline
+detection contribution.
+
+**Fix:** rename the ablation rows to "Probes Only" / "No Probes"; rewrite
+`paper_concepts.md` §2 to credit the per-field contrastive probes for detection
+and describe LOO as field attribution for routing. This correction runs in the
+project's favour — the probe result is stronger and more novel than the LOO story.
+
+**Status:** TODO
+
+---
+
+### E10 · `tiger_project_doc.md` §12 line counts are stale
+**Severity:** Low
+
+`cli.py` 505 → 732 · `vlm_judge.py` ~165 → 255 · `solver.py` 209 → 251 ·
+`schema.py` 112 → 118. The table omits `generator.py`, `viz.py` and
+`eval/repair_ablation.py` entirely.
+
+**Fix:** regenerate, or drop the line-count column — it ages on every commit.
+
+**Status:** TODO
+
+---
+
+### E11 · A planted always-flagged row sits inside the reported synthetic metrics
+**Severity:** Medium — undisclosed evaluation artefact
+**Where:** `tiger/data/synthgen.py:238` · `tiger/data/noise.py:274`
+
+`forced_gen_000` is appended to the catalogue with sentinel `category: "uniforms"`
+(not in `schema.categories`), `color: magenta` and `material: velvet` (neither in
+Ω), hard-assigned to the **report** split, then unconditionally image-blanked by
+the injector regardless of seed or configured rate.
+
+It is guaranteed flagged (unknown category → `flag_text_out_of_domain`),
+guaranteed to have no T2V candidate (its category is unique), and guaranteed to
+fail Eq. 27 at verify. It exists to force the generative-fallback branch to run.
+
+**Consequence:** defensible as a smoke test, but it is a hand-placed row inside
+every reported detection number for the synthetic catalogue, and no document
+mentions it.
+
+**Fix:** move it to a fixture behind a smoke test, exclude it from reported
+metrics, or disclose it in the evaluation setup — then confirm the synthetic
+numbers are unchanged.
+
+**Status:** TODO
+
+---
+
+### E12 · `swap_image` recall is quoted at two granularities as one number
+**Severity:** Trivial
+
+`README.md` quotes `swap_image 0.975` — the coarse **label**, and correct.
+`tiger_project_doc.md` §8 places 0.975 in a table of **subtypes**, where the
+verified value is 0.983 (59/60), with `swap_image_same_category` as the separate
+0.950 row.
+
+**Fix:** one number per granularity, each labelled with which it is.
+
+**Status:** TODO
+
+---
+
 ## Summary
 
-| Section | Items | Blocking? |
-|---|---|---|
-| A. Measurement correctness | 6 | Yes — gates all of B |
-| B. Repair accuracy | 8 (1 done) | The actual goal |
-| C. Config & reproducibility | 5 | Partly |
-| D. Robustness & design | 3 | No |
-| E. Documentation | 5 | After A |
+| Section | Items | ⚑ | Blocking? |
+|---|---|---|---|
+| A. Measurement correctness | 9 | A6 | Yes — gates all of B |
+| B. Repair accuracy | 8 (1 done) | B6 | The actual goal |
+| C. Config & reproducibility | 8 | — | Partly |
+| D. Robustness & design | 13 | D4 | D4, D5 before the baseline run |
+| E. Documentation | 12 | — | After A |
+| **Total** | **50** | **3** | |
 
-**Next action:** `A4` (deepcopy) → `A1` (gamma wiring) → re-run `ablate-repair`
+**Next action:** `A4` (deepcopy) → `A1` (gamma wiring) → `A6` (T2V allowlist) →
+`D4` (two-pass loop) → `D5 → D6/D7` (alias collisions) → re-run `ablate-repair`
 with B0 instrumentation active → read the estimator attribution report → that
 report decides whether B1/B2 (pixel path) or B7 (encoder path) comes first.
+
+The pre-baseline set grew because A6, D4 and D5 all change what the pipeline
+*does*, not only what it *reports*. Measuring before they land produces a
+baseline that the fixed system will not reproduce.
