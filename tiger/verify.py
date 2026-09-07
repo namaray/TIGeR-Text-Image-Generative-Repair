@@ -171,7 +171,13 @@ class IndependentVerifier:
             embs.append(e / (np.linalg.norm(e) + 1e-12))
         pred = domain[int(np.argmax(np.stack(embs) @ img[0]))]
         self.encoder.save_cache()
-        return pred == self.schema.normalize(field, value)
+        # Both sides must be normalised (D6). `pred` is a raw domain entry while
+        # `value` arrives already canonicalised. D5 removed the aliased entries
+        # that made these disagree today, but the comparison is only *correct*
+        # when normalised -- otherwise re-adding any alias to a domain silently
+        # reintroduces spurious vetoes in the column carrying the verifier's
+        # headline contribution.
+        return self.schema.normalize(field, pred) == self.schema.normalize(field, value)
 
     def check_t2v(self, old_image_path: str, new_image_path: str, caption: str) -> bool:
         t = self.encoder.encode_texts([caption])[0]
