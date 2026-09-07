@@ -3,9 +3,12 @@
 Working document. One entry per defect, ordered so that fixes which *gate the
 measurement of other fixes* land first.
 
-**Status:** `TODO` · `DOING` · `DONE` · `BLOCKED`
+**Status:** `TODO` · `DOING` · `DONE` · `BLOCKED` · `PARKED` · `WITHDRAWN`
 **Marker:** ⚑ = changes the design, not just the numbers (see the ⚑ table below)
-**Line references** are current as of branch `diagnostics/v2t-estimator-attribution`.
+**Line references** are current as of branch `docs/fixes-backlog-audit`.
+**Verified:** all 50 entries swept against the code on 2026-09-08. 41 held as
+written; D3 withdrawn; B1/B2/B5 re-classified BLOCKED (no data in-repo can
+exercise them); A2/A3/C3/C5/D12 corrected. Findings are recorded in-entry.
 
 ---
 
@@ -42,11 +45,26 @@ Everything else in this file is a defect against a sound design — fix it and t
 architecture stands. These three say the built system is not the described
 system. Each needs a **decision** before it needs a patch.
 
-| ⚑ | Finding | Entry | What it changes |
+The sweep split these into two kinds, which the first draft conflated.
+
+**Changes the design — new behaviour that has never existed. `PARKED`: needs a
+decision, not a patch. Do not fix these in a cleanup pass.**
+
+| ⚑ | Finding | Entry | Why it is a design change |
 |---|---|---|---|
-| **1** | The repair operator has no ground-truth source, and nothing abstains on *value* | `B6` (with `B1`–`B4`, `E2`, `D6`) | The γ-gate abstains on routing; Eq. 27–29 abstains on schema and similarity. Nothing abstains on *"I do not know what colour this is."* A wrong-but-in-domain value that raises CLIP similarity passes every gate and is committed — that is the ~9 of 19 in `E2`. `B6` is not an accuracy tweak, it is a missing stage. |
-| **2** | The closed loop is not closed, and E3 has no behaviour of its own | `D4` | Four taxonomy classes, three implemented behaviours. The re-route arrow in the README architecture diagram has never executed. |
-| **3** | Cross-domain generalisation was never tested for image repair | `A6` | RQ3's evidence covers V2T and escalation only — T2V was structurally disabled for the entire ABO run. |
+| **1** | The repair operator has no ground-truth source, and nothing abstains on *value* | `B6` (with `B1`–`B4`, `E2`, `D6`) | The γ-gate abstains on routing; Eq. 27–29 abstains on schema and similarity. Nothing abstains on *"I do not know what colour this is."* A wrong-but-in-domain value that raises CLIP similarity passes every gate and is committed — the ~9 of 19 in `E2`. Fixing it inserts an abstention stage between Solver and Verify: a new component. |
+| **2** | The closed loop is not closed, and E3 has no behaviour of its own | `D4` | Four taxonomy classes, three implemented behaviours. Either remedy — rows re-entering a pass, or a two-step `BOTH` plan — adds pipeline behaviour that has never run. |
+
+**Changes a claim's scope — the architecture is untouched.**
+
+| ⚑ | Finding | Entry | Why it is not a design change |
+|---|---|---|---|
+| **3** | Cross-domain generalisation was never tested for image repair | `A6` | The T2V policy gate is *designed* to be configurable. Widening `allowed_categories` is a one-line config edit. What moves is what RQ3 may claim, not the pipeline's shape. |
+
+**Everything else in this file is architecture-preserving.** Sorted by blast
+radius: docs/hygiene only (E1, E2, E4–E7, E10, E12, C6, C7, D2, D13); measurement
+only (A1, A3, A3b, A4, A5, A8, C2, C3, C5, C8, E8); behaviour moves but the design
+is intact (A2, A6, A7, C4, D5–D12, B1–B5, B7).
 
 **Framing consequence.** What exists today is a *high-recall cross-modal error
 detector with a calibrated triage layer, and a repair operator that is the
@@ -85,7 +103,9 @@ rewritten after a corrected run.
 
 ### A2 · VLM judge points at a non-existent model, and the failure mode is a silent veto
 **Severity:** Critical
-**Where:** `tiger/vlm_judge.py:116`, retry list at `:201`, veto branch at `:208`
+**Where:** `tiger/vlm_judge.py:116`, retry list at `:201`, veto branch at `:208-210`
+**Verified:** confirmed — `404` matches none of `429/503/504`, so an invalid model
+ID reaches `return False` at `:210`.
 
 Default is `gemini-3.5-flash-lite`, which is not a real Gemini model ID (the
 family runs 1.5 → 2.0 → 2.5 → 3). Several commits cycled through
@@ -116,8 +136,13 @@ repairs while printing one error line per call.
 `DummyArbiter` emits an `"E4"` key, but `CLASSES = ["E1","E2","E3","CLEAN"]`.
 E4 is produced *by the gamma gate*, never predicted. When `E4` scores highest,
 `route()` matches neither `CLEAN` nor `E1`, falls through to the final return,
-and is labelled **E3/BOTH** — so ~25% of "random" routes are silently
-mislabelled rather than random.
+and is labelled **E3/BOTH** — the final `return` hardcodes `"E3"` regardless of
+what `top` was.
+
+**Verified, with one correction:** the mechanism is confirmed, but "~25%" is
+loose. Four normalised uniforms rarely produce a max ≥ γ, so the gamma gate
+intercepts many rows *before* the E4 fallthrough is reached. The share of routes
+affected depends on γ and cannot be stated without a run.
 
 It also hardcodes `"CLEAN": 0.0`, so the baseline can never dismiss a row —
 it is not a uniform random baseline over the real outcome space.
@@ -290,7 +315,14 @@ estimate toward orange/brown.
 roughly hue 5–35° with bounded saturation/value), then renormalise. Cheap, and
 expected to be one of the larger single wins on Myntra-style imagery.
 
-**Status:** TODO
+**Sweep finding — blocked on data.** The mechanism is confirmed (skin hue sits
+inside both `orange` 14–40° and the `brown` rule's <50°), but the magnitude
+cannot be measured here. `synthgen.render_product_image` (`tiger/data/synthgen.py:122`)
+draws a flat-fill polygon on a 238–250 grey ground: no skin, no models. The
+Fashion and ABO datasets are not in the repo (C5/E6). Changing the estimator with
+no data that exercises the failure is editing blind.
+
+**Status:** BLOCKED on Fashion/ABO data being available locally (C5)
 
 ---
 
@@ -307,7 +339,12 @@ the estimator is measuring a different object entirely.
 2. Background removal / saliency to isolate the foreground object.
 3. CLIP/SigLIP patch-level attention to localise the described product.
 
-**Status:** TODO
+**Sweep finding — blocked on data.** Confirmed in code (`lo, hi = 0.15, 0.85`),
+but unfalsifiable on the only committed dataset: synthgen centres every shape
+within ±4% of frame centre at 36–44% scale, so the central box is *correct* there.
+A regression on the synthetic set would prove nothing either way.
+
+**Status:** BLOCKED on Fashion/ABO data being available locally (C5)
 
 ---
 
@@ -353,7 +390,10 @@ box and compounding B2.
 
 **Fix:** resize preserving aspect ratio, then crop.
 
-**Status:** TODO
+**Sweep finding — blocked on data.** Confirmed in code, but synthgen emits square
+images, so the distortion is identically zero on the committed dataset.
+
+**Status:** BLOCKED on Fashion/ABO data being available locally (C5)
 
 ---
 
@@ -379,7 +419,8 @@ this as a missing pipeline stage between Solver and Verify, not a threshold twea
 
 B0's report already quantifies what this would buy before it is built.
 
-**Status:** TODO (size it from the B0 run)
+**Status:** PARKED — ⚑ design change, decision required before implementation.
+Size it from the B0 run; do not implement in a cleanup pass.
 
 ---
 
@@ -450,7 +491,20 @@ nothing. The README previously advertised 68 unit tests pinning the critical-
 review fixes (F1/F3/F6/F10/F12, the Eq. 27–29 gates, routing constraints,
 fusion quarantine) — that was a genuine credibility asset.
 
-**Fix:** restore the suite from git history (`git show <pre-strip>:tests/...`),
+**Sweep finding — recoverable, and it should land first.** The suite was deleted
+in `a7c1e72` ("Strip repository to absolute bare minimum"). Recovered contents:
+12 files, **73** `def test_` functions (the README's "68" predates the last
+additions). Restore with:
+
+```bash
+git checkout a7c1e72^ -- tests/ && .venv/bin/python -m pytest -q
+```
+
+This is purely additive — no runtime code changes — and it is the instrument that
+proves subsequent fixes are architecture-preserving. **Do it before any other fix.**
+Tests that fail on today's code are themselves findings and belong in this file.
+
+**Fix:** restore the suite as above,
 or remove the pytest config and drop the claim. Do not leave it declared-but-empty.
 Also delete the surviving "✅ Unit tests written" line in
 `paper_assets/tiger_project_doc.md` §11, which `f050639` missed (see E6).
@@ -474,10 +528,15 @@ artifacts are written into the synthetic sample tree.
 
 ### C5 · Evaluation artifacts exist nowhere in the repo
 **Severity:** Medium
-**Where:** `data/outputs/` is gitignored and empty
+**Where:** `data/outputs/` is gitignored; `data/sample/` and `data/thresholds/` are absent
 
 Every number in `paper_assets/` traces to Kaggle CSVs that survive in no
 committed form. For a systems paper this is the reproducibility surface.
+
+**Sweep correction:** `data/outputs/` is **not empty** — 41 files exist locally,
+0 tracked. The artifacts that back the detection numbers are already on disk and
+merely uncommitted, which makes this much cheaper than it reads. `data/sample/`
+and `data/thresholds/` genuinely do not exist and must be regenerated (E6).
 
 **Fix:** commit the summary CSVs (not the caches) under `paper_assets/results/`.
 
@@ -561,18 +620,28 @@ discovered by a reviewer.
 
 ---
 
-### D3 · Position bias in `check_t2v`
-**Severity:** Low
-**Where:** `tiger/verify.py` — old/new images presented in fixed order
+### D3 · ~~Position bias in `check_t2v`~~ — WITHDRAWN
+**Severity:** ~~Low~~ — does not apply
+**Where:** `tiger/verify.py:176` · `tiger/vlm_judge.py:246`
 
-MLLM-as-a-Judge (ICML 2024) names position bias as a failure mode present even
-in GPT-4V. The comparative check is otherwise the *reliable* setting for a VLM
-judge, so this is worth controlling.
+**Original claim:** old/new images are presented in a fixed order, and
+MLLM-as-a-Judge (ICML 2024) names position bias as a failure mode present even in
+GPT-4V.
 
-**Fix:** evaluate both orderings and require consistency; count disagreement as
-a veto.
+**Sweep finding: the premise does not hold for either implementation.**
 
-**Status:** TODO
+1. `IndependentVerifier.check_t2v` is a **bi-encoder**. It embeds both images
+   independently and compares `imgs[0] @ t` against `imgs[1] @ t`. Cosine
+   similarity has no notion of presentation order — there is no position to bias.
+2. `GeminiVLMJudge.check_t2v` sends **one image** (the proposed replacement).
+   Position bias requires two items in an order; there is no ordering. This was
+   already designed out — see `project_chronicle.md` Hiccup 3.
+
+The citation is real and the failure mode is real for VLM judges in general; it
+is simply not reachable in this code. Implementing "evaluate both orderings"
+would add cost for a bias that cannot occur.
+
+**Status:** WITHDRAWN — no action. Retained so the reasoning is not re-derived.
 
 ---
 
@@ -606,9 +675,11 @@ swapped and keep the wrong colour.
 2. give `BOTH` an explicit two-step plan inside one pass: T2V, re-embed, then V2T
    against the new image.
 
-Either changes results. **Land before the corrected baseline run**, not after.
+Either changes results. If adopted, it must land **before** the corrected
+baseline run, not after.
 
-**Status:** TODO
+**Status:** PARKED — ⚑ design change, decision required before implementation.
+Do not fix in a cleanup pass.
 
 ---
 
@@ -757,6 +828,10 @@ or an explicit cap). Correct the chronicle's description of what was built.
 `run_repair_cycle` emits `n_products`, `by_status` and `max_passes`. There is no
 `total` key, so the user-facing summary always reads *"We attempted to repair the
 0 flagged products."*
+
+**Sweep note:** this is the *second* instance of the same bug. `8ba8d19` already
+fixed the sibling at `tiger/eval/repair_ablation.py:135` (`total_attempted` now
+sums `repaired + escalated`) as a drive-by. Only the `cli.py` site remains.
 
 **Fix:** use `n_products`, or sum `by_status`.
 
@@ -958,20 +1033,27 @@ verified value is 0.983 (59/60), with `swap_image_same_category` as the separate
 
 ## Summary
 
-| Section | Items | ⚑ | Blocking? |
+| Section | Items | Actionable | Parked / blocked / withdrawn |
 |---|---|---|---|
-| A. Measurement correctness | 9 | A6 | Yes — gates all of B |
-| B. Repair accuracy | 8 (1 done) | B6 | The actual goal |
-| C. Config & reproducibility | 8 | — | Partly |
-| D. Robustness & design | 13 | D4 | D4, D5 before the baseline run |
-| E. Documentation | 12 | — | After A |
-| **Total** | **50** | **3** | |
+| A. Measurement correctness | 9 | 9 | — |
+| B. Repair accuracy | 8 | 3 | B0 done · B1, B2, B5 blocked on data · B4 blocked on B0 · **B6 parked ⚑** |
+| C. Config & reproducibility | 8 | 8 | — |
+| D. Robustness & design | 13 | 11 | **D4 parked ⚑** · D3 withdrawn |
+| E. Documentation | 12 | 11 | E3 blocked on A1 |
+| **Total** | **50** | **42** | 2 parked · 4 blocked · 1 withdrawn · 1 done |
 
-**Next action:** `A4` (deepcopy) → `A1` (gamma wiring) → `A6` (T2V allowlist) →
-`D4` (two-pass loop) → `D5 → D6/D7` (alias collisions) → re-run `ablate-repair`
+**Next action:** `C3` (restore the 73-test suite — purely additive, and the
+instrument that proves the rest is architecture-preserving) → `A4` (deepcopy) →
+`A1` (gamma wiring) → `A3`/`A3b` (random baseline) → `A5` (scoring scope) →
+`A6` (T2V allowlist) → `D5 → D6/D7` (alias collisions) → re-run `ablate-repair`
 with B0 instrumentation active → read the estimator attribution report → that
-report decides whether B1/B2 (pixel path) or B7 (encoder path) comes first.
+report decides whether B7 (encoder path) is worth pursuing while B1/B2 remain
+blocked on data.
 
-The pre-baseline set grew because A6, D4 and D5 all change what the pipeline
-*does*, not only what it *reports*. Measuring before they land produces a
-baseline that the fixed system will not reproduce.
+C3 comes first because every fix after it needs a regression harness. A6 and D5
+join the pre-baseline set because they change what the pipeline *does*, not only
+what it *reports*: a baseline measured before them is not one the fixed system
+reproduces.
+
+`D4` and `B6` are **parked** — they are the two ⚑ design changes and are excluded
+from the fix pass by decision, not by oversight.
