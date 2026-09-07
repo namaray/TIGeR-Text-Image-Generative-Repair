@@ -59,6 +59,25 @@ def _paths(cfg: dict) -> dict[str, Path]:
     }
 
 
+def _load_fusion(enabled: bool):
+    """Precision-floor fusion config, or None (roadmap 3.4, finding A7).
+
+    `detect` and `run_repair_cycle` never loaded this -- only `ablate` did -- so
+    the advertised fused operating point (P=0.888) was an offline ablation row
+    while the live pipeline ran un-fused at P=0.793. Loading is opt-in because
+    fusion trades recall for precision (mutate_text recall 0.853 -> 0.773), which
+    changes what reaches the repair stage.
+    """
+    if not enabled:
+        return None
+    from tiger import fusion as fusion_mod
+    path = ROOT / "data/thresholds/tiger_fusion.json"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"--fusion requested but {path} is missing; run `calibrate-fusion` first")
+    return fusion_mod.FusionConfig.from_json(path.read_text(encoding="utf-8"))
+
+
 def _encoder(cfg: dict) -> ClipEncoder:
     m = cfg["models"]
     return ClipEncoder(m["clip_model_name"], device=m.get("device", "cpu"),
@@ -191,8 +210,9 @@ def cmd_detect(cfg: dict, args) -> None:
     thr = sieve_mod.SieveThresholds.from_json(thr_path.read_text(encoding="utf-8"))
 
     enc = _encoder(cfg)
+    fusion = _load_fusion(getattr(args, "fusion", False))
     sig, arrays = sieve_mod.compute_signals(noisy, enc, schema, cfg, ROOT)
-    flagged = sieve_mod.apply_thresholds(sig, thr)
+    flagged = sieve_mod.apply_thresholds(sig, thr, fusion=fusion)
 
     import numpy as np
     p["outputs"].mkdir(parents=True, exist_ok=True)
@@ -202,6 +222,7 @@ def cmd_detect(cfg: dict, args) -> None:
     flagged.to_parquet(out, index=False)
     print("\n\n📊 Stage 1: Error Detection Complete")
     print("-" * 50)
+    print(f"operating point: {'full + fusion (precision floor)' if fusion else 'full (OR-fused signals)'}")
     flagged_count = int(flagged['flagged'].sum())
     total_count = len(flagged)
     print(f"Out of {total_count} products scanned, we flagged {flagged_count} suspicious items.")
@@ -481,7 +502,8 @@ def cmd_ablate_repair(cfg: dict, args) -> None:
 
     results = repair_ablation.run_repair_ablations(
         noisy, enc, schema, thr, loo_stats, vcal, model, cfg, ROOT,
-        generator=generator, vlm_judge=independent, sample_size=sample_size
+        generator=generator, vlm_judge=independent, sample_size=sample_size,
+        fusion=_load_fusion(getattr(args, "fusion", False))
     )
     
     print(repair_ablation.format_repair_ablations(results))
@@ -556,7 +578,8 @@ def cmd_repair(cfg: dict, args) -> None:
         
     repaired, report = repair_mod.run_repair_cycle(noisy, enc, schema, thr, loo_stats, vcal,
                                                    model, cfg, ROOT, max_passes=max_passes,
-                                                   independent=independent, generator=generator)
+                                                   independent=independent, generator=generator,
+                                                   fusion=_load_fusion(getattr(args, "fusion", False)))
 
     p["outputs"].mkdir(parents=True, exist_ok=True)
     repaired.to_parquet(p["processed"] / f"repaired_report_{tag}.parquet", index=False)
@@ -600,7 +623,7 @@ def cmd_repair(cfg: dict, args) -> None:
 
     # before/after re-flag context (reported, NOT the acceptance criterion -- F7)
     sig_a, _ = sieve_mod.compute_signals(repaired, enc, schema, cfg, ROOT)
-    flg_a = sieve_mod.apply_thresholds(sig_a, thr)
+    flg_a = sieve_mod.apply_thresholds(sig_a, thr, fusion=_load_fusion(getattr(args, "fusion", False)))
     still_flagged = int(flg_a['flagged'].sum())
     
     print("\nPost-Repair Check:")
@@ -695,6 +718,11 @@ def main() -> None:
                     help="repair: cross-check each repair with the independent verifier encoder (6.4)")
     ap.add_argument("--vlm-judge", action="store_true",
                     help="repair: cross-check each repair with the Gemini VLM judge (6.4, reads GEMINI_API_KEY from .env)")
+    ap.add_argument("--fusion", action="store_true",
+                    help="detect/repair/ablate-repair: apply the precision-floor fusion "
+                         "config from calibrate-fusion (roadmap 3.4). Off by default: "
+                         "fusion trades recall for precision, so it changes what reaches "
+                         "the repair stage")
     ap.add_argument("--generative-fallback", action="store_true",
                     help="repair: use Stable Diffusion to generate missing images (requires diffusers)")
     # import-abo specific args

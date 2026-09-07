@@ -130,7 +130,7 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
                          thr: sieve_mod.SieveThresholds, loo_stats: dict,
                          vcal: verify_mod.VerifyCalibration, trained_model: arbiter_mod.ArbiterModel,
                          cfg: dict, root: Path, generator=None, vlm_judge=None,
-                         sample_size: int | None = 20) -> dict:
+                         sample_size: int | None = 20, fusion=None) -> dict:
     
     # 1. Sample the dataset intelligently: grab ALL corrupted rows + some clean
     #    context rows so the repair pipeline has real material to work with.
@@ -280,7 +280,7 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
     cfg_full = copy.deepcopy(cfg)
     rep_full, rep_full_report = repair_mod.run_repair_cycle(
         noisy_sample, enc, schema, thr, loo_stats, vcal, trained_model, cfg_full, root,
-        max_passes=2, independent=vlm_judge, generator=generator)
+        max_passes=2, independent=vlm_judge, generator=generator, fusion=fusion)
     results["full"], _c = _evaluate_run(rep_full_report, rep_full, "full")
     v2t_cases += _c
 
@@ -295,7 +295,7 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
     )
     rep_no_arb, rep_no_arb_report = repair_mod.run_repair_cycle(
         noisy_sample, enc, schema, thr, loo_stats, vcal, dummy_model, cfg_no_arbiter, root,
-        max_passes=2, independent=vlm_judge, generator=generator)
+        max_passes=2, independent=vlm_judge, generator=generator, fusion=fusion)
     results["no_arbiter"], _c = _evaluate_run(rep_no_arb_report, rep_no_arb, "no_arbiter")
     v2t_cases += _c
 
@@ -303,7 +303,7 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
     print("3/5: Running 'No VLM Judge'...")
     rep_no_vlm, rep_no_vlm_report = repair_mod.run_repair_cycle(
         noisy_sample, enc, schema, thr, loo_stats, vcal, trained_model, cfg_full, root,
-        max_passes=2, independent=None, generator=generator)
+        max_passes=2, independent=None, generator=generator, fusion=fusion)
     results["no_vlm"], _c = _evaluate_run(rep_no_vlm_report, rep_no_vlm, "no_vlm")
     v2t_cases += _c
 
@@ -311,7 +311,7 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
     print("4/5: Running 'No Generative Fallback'...")
     rep_no_gen, rep_no_gen_report = repair_mod.run_repair_cycle(
         noisy_sample, enc, schema, thr, loo_stats, vcal, trained_model, cfg_full, root,
-        max_passes=2, independent=vlm_judge, generator=None)
+        max_passes=2, independent=vlm_judge, generator=None, fusion=fusion)
     results["no_gen"], _c = _evaluate_run(rep_no_gen_report, rep_no_gen, "no_gen")
     v2t_cases += _c
 
@@ -326,7 +326,7 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
     cfg_no_gamma.setdefault("arbiter", {})["gamma"] = 0.0
     rep_no_gamma, rep_no_gamma_report = repair_mod.run_repair_cycle(
         noisy_sample, enc, schema, thr, loo_stats, vcal, trained_model, cfg_no_gamma, root,
-        max_passes=2, independent=vlm_judge, generator=generator)
+        max_passes=2, independent=vlm_judge, generator=generator, fusion=fusion)
     results["no_gamma"], _c = _evaluate_run(rep_no_gamma_report, rep_no_gamma, "no_gamma")
     v2t_cases += _c
 

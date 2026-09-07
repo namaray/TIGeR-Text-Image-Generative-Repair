@@ -59,7 +59,7 @@ def run_repair_cycle(working: pd.DataFrame, encoder: ClipEncoder, schema: Schema
                      thr: sieve_mod.SieveThresholds, loo_stats: dict,
                      vcal: verify_mod.VerifyCalibration, model: arbiter_mod.ArbiterModel,
                      cfg: dict, root: Path, max_passes: int = 2,
-                     independent=None, generator=None) -> tuple[pd.DataFrame, dict]:
+                     independent=None, generator=None, fusion=None) -> tuple[pd.DataFrame, dict]:
     working = working.reset_index(drop=True).copy()
     outcomes: dict[str, RepairOutcome] = {}
 
@@ -71,7 +71,7 @@ def run_repair_cycle(working: pd.DataFrame, encoder: ClipEncoder, schema: Schema
 
     for pass_i in range(1, max_passes + 1):
         sig, arrays = sieve_mod.compute_signals(working, encoder, schema, cfg, root)
-        flagged = sieve_mod.apply_thresholds(sig, thr)
+        flagged = sieve_mod.apply_thresholds(sig, thr, fusion=fusion)
 
         image_emb = arrays["image_emb"]
         caption_emb = arrays["caption_emb"]
