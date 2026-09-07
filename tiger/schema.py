@@ -44,6 +44,21 @@ class Schema:
             return [str(v) for v in spec.get("values", [])]
         return []
 
+    def aliases(self, fld: str) -> dict[str, str]:
+        spec = self.attributes.get(fld, {})
+        return dict(spec.get("aliases", {}) or {}) if spec.get("type") == "enum" else {}
+
+    def surface_forms(self, fld: str) -> list[str]:
+        """Every string that may appear in text and normalise into Omega_j.
+
+        Domain members plus alias keys, longest first so a multi-word form wins
+        over a prefix of itself ("multi-color" before "multi"). Text scanners
+        must use this rather than domain(): a title reading "Navy Shirt" carries
+        a colour word even though `navy` is an alias, not a domain member.
+        """
+        forms = set(self.domain(fld)) | set(self.aliases(fld))
+        return sorted(forms, key=lambda v: (-len(v), v))
+
     def checkable_fields(self) -> list[str]:
         """Enum fields, i.e. those with a finite domain a probe can enumerate."""
         return [k for k, v in self.attributes.items() if v.get("type") == "enum"]
@@ -109,10 +124,34 @@ class Schema:
         return not self.validate_attrs(category, attrs)
 
 
+def _assert_domains_disjoint_from_aliases(attributes: dict) -> None:
+    """Omega_j and the alias keys must not intersect (finding D5).
+
+    A value that is both a domain member and an alias of another value is a
+    semantic duplicate: probes enumerate it as a rival candidate for the same
+    evidence, and every raw-vs-normalised comparison in the codebase silently
+    disagrees with itself. Refuse to load rather than degrade quietly.
+    """
+    for fld, spec in (attributes or {}).items():
+        if (spec or {}).get("type") != "enum":
+            continue
+        values = {str(v).strip().lower() for v in (spec.get("values") or [])}
+        alias_keys = {str(k).strip().lower() for k in (spec.get("aliases") or {})}
+        clash = sorted(values & alias_keys)
+        if clash:
+            raise ValueError(
+                f"schema attribute {fld!r}: {clash} appear in both `values` and "
+                f"`aliases`. A canonical value cannot also be an alias of another "
+                f"value. Keep each surface form in exactly one place."
+            )
+
+
 def load_schema(path: str | Path) -> Schema:
     obj = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    attributes = obj.get("attributes", {}) or {}
+    _assert_domains_disjoint_from_aliases(attributes)
     return Schema(
-        attributes=obj.get("attributes", {}) or {},
+        attributes=attributes,
         categories=[str(c) for c in (obj.get("categories", []) or [])],
         constraints=obj.get("constraints", []) or [],
     )

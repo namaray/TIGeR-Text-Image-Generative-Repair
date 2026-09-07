@@ -15,14 +15,31 @@ attributes:
     # ABO runs. See paper_draft_materials.md §6 and ROADMAP_PROGRESS.md for rationale.
     required_for_categories: [shirts, shoes, bags, hats]
     type: enum
-    values: [red, blue, green, black, white, yellow, pink, purple, brown, orange, gray, multicolour,
-             silver, gold, beige, navy, teal]  # silver/gold/beige/navy/teal for ABO
+    # Omega_color: canonical values ONLY. A surface form that maps onto one of
+    # these belongs in `aliases`, never in both -- see tiger/schema.py, which
+    # refuses to load a schema where the two sets intersect.
+    #
+    # silver/gold/beige/navy/teal were previously listed here AND aliased. Three
+    # things followed:
+    #   - schema.domain() returned 17 entries of which 5 were semantic
+    #     duplicates, so the contrastive probes scored "silver" against "gray"
+    #     as rival candidates for the same pixels;
+    #   - anything comparing a raw domain value to a normalised one broke
+    #     (verify.check_v2t vetoed correct repairs, sieve._title_color invented
+    #     contradictions);
+    #   - synthgen and the noise injector draw colours from this list, and
+    #     COLOR_RGB has no entry for the five, so `cli synthgen` raised KeyError
+    #     on roughly a third of products -- which is why data/sample/ cannot
+    #     currently be regenerated.
+    values: [red, blue, green, black, white, yellow, pink, purple, brown, orange, gray, multicolour]
     aliases:
       grey: gray
       multicolor: multicolour
       multi-color: multicolour
-      silver: gray        # ABO metallic silver → gray
-      gold: yellow        # ABO gold → yellow
+      # ABO surface forms. These are recognised in text and normalised into
+      # Omega_color; they are deliberately not domain members of their own.
+      silver: gray
+      gold: yellow
       beige: white
       navy: blue
       teal: green
