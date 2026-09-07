@@ -70,7 +70,18 @@ arbiter:
                                        # noise seeds over the CALIBRATION split;
                                        # last seed is held out for reliability
   t2v_policy:
-    allowed_categories: ["shirts", "shoes", "bags", "hats"]
+    # Categories for which an image swap may be automated. A category absent
+    # here is escalated to human review BEFORE schema validation or the gamma
+    # gate is consulted (tiger/arbiter.py:242).
+    #
+    # This listed the four fashion categories only, so every ABO E2/E3 row --
+    # electronics, furniture, kitchen, home_decor -- was force-escalated by a
+    # fashion-only allowlist. The cross-domain run therefore never exercised
+    # T2V at all, and RQ3's evidence covers V2T and escalation only. The high
+    # ABO escalation rate was attributed to the `color` schema requirement (H10)
+    # and to Arbiter underconfidence (H11); this gate sat upstream of both.
+    allowed_categories: ["shirts", "shoes", "bags", "hats",
+                         "electronics", "furniture", "kitchen", "home_decor"]
     max_cost_units: 5.0
 
 verify:
