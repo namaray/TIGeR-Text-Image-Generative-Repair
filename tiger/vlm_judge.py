@@ -100,12 +100,26 @@ Do not explain. Do not reason. Do not hedge. Do not output anything other than Y
 # judge class
 # ---------------------------------------------------------------------------
 
+class VLMConfigurationError(RuntimeError):
+    """The judge is misconfigured (bad model ID, revoked key, no access).
+
+    Distinct from a judgement. A configuration fault must never be reported as
+    "the verifier vetoed this repair" -- see the veto branch in `_call`.
+    """
+
+
 class GeminiVLMJudge:
-    """Gemini-1.5-Flash-based VLM judge for the independent verification step (6.4).
+    """Gemini-backed VLM judge for the independent verification step (6.4).
+
+    The model ID is a parameter, not a property of this class -- do not restate a
+    specific version here. Earlier revisions of this docstring claimed 1.5-Flash
+    while the default said something else entirely, and neither matched
+    pipeline_architecture.md. `self.model_name` is the single source of truth.
 
     Args:
         api_key:      Gemini API key (loaded from .env if not provided).
-        model_name:   Gemini model to use.  Flash is free-tier; Pro is higher quality.
+        model_name:   Gemini model to use. MUST be verified against
+                      `genai.list_models()` for the key in use.
         rpm_limit:    Requests per minute cap (15 for Flash free tier).
         verbose:      Print each judgement to stdout.
     """
@@ -113,7 +127,11 @@ class GeminiVLMJudge:
     def __init__(
         self,
         api_key: str | None = None,
-        model_name: str = "gemini-3.5-flash-lite",
+        # NOTE: verify against `genai.list_models()` with a live key before
+        # trusting this default. Previous values in this slot -- gemini-3.5-flash-lite,
+        # gemini-3.7-flash, gemini-3.1-pro -- were not real model IDs, and an
+        # invalid ID used to degrade into a silent 100% veto (see _call).
+        model_name: str = "gemini-2.5-flash",
         rpm_limit: int = 15,
         verbose: bool = False,
     ):
@@ -198,6 +216,19 @@ class GeminiVLMJudge:
                 return answer
             except Exception as exc:  # noqa: BLE001
                 err_str = str(exc)
+                # A configuration fault is not a judgement. An invalid model ID
+                # raises 404 NotFound, which matched none of the retry codes and
+                # fell through to the veto branch below -- so a misconfigured run
+                # vetoed 100% of repairs while printing one error line per call
+                # and reporting the result as semantic rejections.
+                if any(m in err_str for m in ("404", "NotFound", "not found",
+                                              "PERMISSION_DENIED", "API_KEY_INVALID")):
+                    raise VLMConfigurationError(
+                        f"Gemini rejected model {self.model_name!r}: {exc}\n"
+                        "This is a configuration error, not a repair judgement. "
+                        "List the models your key can reach with "
+                        "`genai.list_models()` and pin a valid ID."
+                    ) from exc
                 if any(code in err_str for code in ["429", "503", "504"]) and attempt < 2:
                     print(f"[GeminiVLMJudge] API error/timeout ({err_str[:25]}...). Retrying in 15s... (attempt {attempt+1}/3)")
                     self._last_call = time.monotonic()
