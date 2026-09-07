@@ -9,6 +9,7 @@ subset of the noisy dataset.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 import random
@@ -146,7 +147,7 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
 
     # Config 1: Full System
     print("1/5: Running 'Full System'...")
-    cfg_full = cfg.copy()
+    cfg_full = copy.deepcopy(cfg)
     rep_full, rep_full_report = repair_mod.run_repair_cycle(
         noisy_sample, enc, schema, thr, loo_stats, vcal, trained_model, cfg_full, root,
         max_passes=2, independent=vlm_judge, generator=generator)
@@ -155,7 +156,7 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
 
     # Config 2: No Arbiter (Random Routing)
     print("2/5: Running 'No Arbiter (Random Routing)'...")
-    cfg_no_arbiter = cfg.copy()
+    cfg_no_arbiter = copy.deepcopy(cfg)
     dummy_model = DummyArbiter(
         feature_names=trained_model.feature_names, classes=trained_model.classes,
         mean=trained_model.mean, scale=trained_model.scale, coef=trained_model.coef,
@@ -185,7 +186,7 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
 
     # Config 5: No Gamma Gate (Set gamma threshold to 0.0 so everything passes)
     print("5/5: Running 'No Gamma Gate (Accept All Routes)'...")
-    cfg_no_gamma = cfg.copy()
+    cfg_no_gamma = copy.deepcopy(cfg)
     if "fusion" not in cfg_no_gamma:
         cfg_no_gamma["fusion"] = {}
     cfg_no_gamma["fusion"]["gamma"] = 0.0
