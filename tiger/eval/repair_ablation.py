@@ -18,11 +18,71 @@ import pandas as pd
 import numpy as np
 
 from tiger import arbiter as arbiter_mod
+from tiger import text_views
 from tiger import repair as repair_mod
 from tiger import verify as verify_mod
 from tiger import sieve as sieve_mod
 from tiger.encoders import ClipEncoder
 from tiger.schema import Schema
+
+
+ATTR_FIELDS = ("color", "material", "pattern")
+
+
+def truth_from_audit(audit: pd.DataFrame) -> tuple[dict, dict]:
+    """Noise audit -> (row_id -> {field: correct value}, row_id -> original image).
+
+    A5: the caller previously keyed on `field == "color"` alone, so material and
+    pattern patches were committed but never scored. Handles the compound
+    `image_path+color` key mixed_swap_color writes as "{image}|{colour}".
+    `field == "title"` is ignored on purpose: title_contradiction leaves the
+    attributes correct, so there is no attribute value to restore.
+    """
+    truth_attrs: dict[str, dict[str, str]] = {}
+    truth_image: dict[str, str] = {}
+    if audit is None or getattr(audit, "empty", True):
+        return truth_attrs, truth_image
+    for _, r in audit.iterrows():
+        rid, fld = str(r["row_id"]), str(r.get("field", ""))
+        raw = r.get("old_value", "")
+        old = "" if raw is None or (isinstance(raw, float) and pd.isna(raw)) else str(raw)
+        if fld in ATTR_FIELDS:
+            truth_attrs.setdefault(rid, {})[fld] = old
+        elif fld == "image_path":
+            truth_image[rid] = old
+        elif fld == "image_path+color":
+            img, _, col = old.partition("|")
+            truth_image[rid] = img
+            if col:
+                truth_attrs.setdefault(rid, {})["color"] = col
+    return truth_attrs, truth_image
+
+
+def image_provenance(noisy_df: pd.DataFrame, truth_attrs: dict, truth_image: dict) -> dict:
+    """image path -> (category, colour) of the product that image actually depicts.
+
+    A row's own image depicts it, unless the injector overwrote that path, in
+    which case the audit's old_value names the image that does.
+
+    Exists because A5's proposed T2V metric -- "did the swap return the
+    originally correct product's image?" -- is unachievable by construction.
+    noise.swap_image COPIES a donor path over the row's own (noise.py:158-178),
+    leaving the row's true original referenced by no row, and CandidatePool holds
+    in-use paths only (solver.py:135-141), so the original is absent from the
+    pool by design: the F14 held-out protocol. Scoring recovery of it would
+    report 0% forever. The measurable question is whether the installed image
+    depicts something matching the row's true text.
+    """
+    depicts: dict[str, tuple[str, str]] = {}
+    for _, r in noisy_df.iterrows():
+        rid = str(r["row_id"])
+        own = truth_image.get(rid) or str(r.get("image_path", ""))
+        if not own:
+            continue
+        attrs = text_views.parse_attrs(r.get("attributes", {}))
+        true_color = truth_attrs.get(rid, {}).get("color") or str(attrs.get("color", ""))
+        depicts[own] = (str(r.get("category", "")), str(true_color))
+    return depicts
 
 
 class DummyArbiter(arbiter_mod.ArbiterModel):
@@ -104,11 +164,11 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
         # Try alternate naming convention
         audit_path = root / cfg["data"]["processed_dir"] / f"noise_audit_report_seed{seed}.csv"
     audit = pd.read_csv(audit_path) if audit_path.exists() else pd.DataFrame()
-    truth_color = {}
-    if not audit.empty:
-        for _, r in audit[audit["field"] == "color"].iterrows():
-            truth_color[str(r["row_id"])] = str(r["old_value"])
-            
+    truth_attrs, truth_image = truth_from_audit(audit)
+    # colour-only view, retained so the existing CSV schema keeps working
+    truth_color = {rid: v["color"] for rid, v in truth_attrs.items() if "color" in v}
+    depicts = image_provenance(noisy_df, truth_attrs, truth_image)
+
     def _evaluate_run(report: dict, final_df: pd.DataFrame,
                       config_name: str = "") -> tuple[dict, list[dict]]:
         """Aggregate metrics plus one diagnostic row per scored V2T repair.
@@ -157,12 +217,57 @@ def run_repair_ablations(noisy_df: pd.DataFrame, enc: ClipEncoder, schema: Schem
                     "probe_correct": (int(bv == truth) if bv else None),
                 })
 
+        def _attrs_of(rid: str) -> dict:
+            a = after.at[rid, "attributes"]
+            return text_views.parse_attrs(a.iloc[0] if isinstance(a, pd.Series) else a)
+
+        def _cell(rid: str, col: str):
+            v = after.at[rid, col]
+            return v.iloc[0] if isinstance(v, pd.Series) else v
+
+        # ---- attribute restoration across every audited field (A5) ----
+        per_field: dict[str, dict[str, int]] = {}
+        for rid, oc in report["outcomes"].items():
+            if oc["final_status"] != "repaired" or rid not in truth_attrs:
+                continue
+            got = _attrs_of(rid)
+            for fld, truth in truth_attrs[rid].items():
+                b = per_field.setdefault(fld, {"correct": 0, "n": 0})
+                b["n"] += 1
+                b["correct"] += int(str(got.get(fld, "")) == str(truth))
+        attr_n = sum(b["n"] for b in per_field.values())
+        attr_k = sum(b["correct"] for b in per_field.values())
+
+        # ---- image restoration (A5); see image_provenance for the metric ----
+        t2v_k = t2v_n = 0
+        for rid, oc in report["outcomes"].items():
+            if oc["final_status"] != "repaired":
+                continue
+            if not any(e.get("direction") == "T2V" for e in (oc.get("log") or [])):
+                continue
+            t2v_n += 1
+            installed = depicts.get(str(_cell(rid, "image_path")))
+            if installed is None:
+                continue  # synthesised image: depicts no catalogue product
+            want_col = str(truth_attrs.get(rid, {}).get("color")
+                           or _attrs_of(rid).get("color", ""))
+            t2v_k += int(installed == (str(_cell(rid, "category")), want_col))
+
         return {
             "total_attempted": repaired_c + escalated_c,
             "repaired": repaired_c,
             "escalated": escalated_c,
+            # colour-only view, retained for existing CSV consumers
             "color_accuracy": (v2t_correct / max(1, v2t_total)),
-            "v2t_total": v2t_total
+            "v2t_total": v2t_total,
+            # A5: every audited attribute field, N reported per metric
+            "attr_accuracy": (attr_k / attr_n) if attr_n else float("nan"),
+            "attr_total": attr_n,
+            "attr_by_field": {k: {**v, "accuracy": (v["correct"] / v["n"]) if v["n"] else float("nan")}
+                              for k, v in sorted(per_field.items())},
+            # A5: image repairs, previously not scored at all
+            "t2v_accuracy": (t2v_k / t2v_n) if t2v_n else float("nan"),
+            "t2v_total": t2v_n,
         }, cases
 
     results = {}
@@ -235,8 +340,9 @@ def format_repair_ablations(results: dict) -> str:
     lines.append("🛠️ Repair-Side Ablation Study: Component Impact")
     lines.append("=" * 75)
     lines.append("")
-    lines.append(f"{'Configuration':<25s} | {'Repaired':<8s} | {'Escalated':<10s} | {'Restoration Acc (V2T)':<20s}")
-    lines.append("-" * 75)
+    lines.append(f"{'Configuration':<25s} | {'Repaired':<8s} | {'Escalated':<10s} | "
+                 f"{'Attr restored':<16s} | {'Image restored':<16s}")
+    lines.append("-" * 95)
 
     friendly_names = {
         "full": "Full System",
@@ -253,8 +359,22 @@ def format_repair_ablations(results: dict) -> str:
             continue
         r = results[name]
         label = friendly_names.get(name, name)
-        acc_str = f"{r['color_accuracy']:.1%} ({r['v2t_total']} cases)" if r['v2t_total'] > 0 else "N/A"
-        lines.append(f"{label:<25s} | {r['repaired']:<8d} | {r['escalated']:<10d} | {acc_str:<20s}")
+        def _cell(acc_key, n_key):
+            n = r.get(n_key) or 0
+            return f"{r[acc_key]:.1%} (n={n})" if n else "n/a"
+        lines.append(f"{label:<25s} | {r['repaired']:<8d} | {r['escalated']:<10d} | "
+                     f"{_cell('attr_accuracy', 'attr_total'):<16s} | "
+                     f"{_cell('t2v_accuracy', 't2v_total'):<16s}")
+
+    if "full" in results and results["full"].get("attr_by_field"):
+        lines.append("")
+        lines.append("Full System, attribute restoration by field:")
+        for fld, b in results["full"]["attr_by_field"].items():
+            lines.append(f"  {fld:<10s} {b['accuracy']:.1%}  ({b['correct']}/{b['n']})")
+        lines.append("  Image repairs are scored separately: a T2V swap counts as restored")
+        lines.append("  when the installed image depicts a product matching this row's true")
+        lines.append("  category and colour. The row's own original is held out of the")
+        lines.append("  candidate pool by design (F14), so recovering it is not the target.")
 
     lines.append("")
     lines.append("Key Takeaways:")
@@ -367,6 +487,13 @@ def save_repair_ablations_csv(results: dict, out_path: str | Path) -> None:
                 "Total Attempted": r["total_attempted"],
                 "Color Accuracy": r["color_accuracy"],
                 "V2T Cases": r["v2t_total"],
+                "Attr Accuracy": r.get("attr_accuracy"),
+                "Attr Cases": r.get("attr_total"),
+                "T2V Accuracy": r.get("t2v_accuracy"),
+                "T2V Cases": r.get("t2v_total"),
             })
+            for fld, b in (r.get("attr_by_field") or {}).items():
+                rows[-1][f"Attr Accuracy ({fld})"] = b["accuracy"]
+                rows[-1][f"Attr Cases ({fld})"] = b["n"]
     if rows:
         pd.DataFrame(rows).to_csv(out_path, index=False)
