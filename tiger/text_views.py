@@ -20,11 +20,34 @@ from __future__ import annotations
 import json
 from typing import Any
 
+# Finding D8: every category needs a real singular noun. Anything falling through
+# to rstrip("s") produced captions like "a photo of a red home_decor" -- an
+# underscore token and a non-noun, fed to CLIP as the entire prompt ensemble, so
+# every probe margin and LOO delta derived from it was measured against a
+# degraded prompt.
 CATEGORY_SINGULAR = {
+    # synthetic fashion catalogue
     "shirts": "shirt",
     "shoes": "shoe",
     "bags": "bag",
     "hats": "hat",
+    # ABO vertical A -- furnishing
+    "chair": "chair",
+    "sofa": "sofa",
+    "table": "table",
+    "ottoman": "ottoman",
+    "stool": "stool",
+    "rug": "rug",
+    "lamp": "lamp",
+    "light_fixture": "light fixture",
+    "wall_art": "piece of wall art",
+    # ABO vertical B -- accessories
+    "ring": "ring",
+    "necklace": "necklace",
+    "earring": "earring",
+    "handbag": "handbag",
+    "suitcase": "suitcase",
+    "hat": "hat",
 }
 
 CLIP_TOKEN_LIMIT = 77

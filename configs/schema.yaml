@@ -8,11 +8,28 @@
 
 attributes:
   color:
-    # Required only for fashion categories where color is a primary product identifier.
-    # For electronics, furniture, kitchen, and home_decor (ABO domains), color is
-    # optional — a phone case or chair can be validly described without a color
-    # attribute. Making it globally required caused 65%+ escalation in cross-domain
-    # ABO runs. See paper_draft_materials.md §6 and ROADMAP_PROGRESS.md for rationale.
+    # Required only where colour is a primary customer-facing differentiator and
+    # is reliably populated. Measured on the local ABO release: sofa 95%, lamp
+    # 97%, ottoman 97%, handbag 92%, hat 93%, suitcase 96%. Types below ~85% are
+    # left optional so a missing colour escalates on its merits rather than
+    # failing schema validation outright (the H10 failure mode).
+    # Synthetic fashion categories: colour is always generated, so requiring it
+    # is what lets the schema check catch `attribute_drop` (recall 1.000). Do not
+    # remove these -- doing so silently kills that detection signal.
+    # ABO types: listed only where colour is reliably populated (sofa 95%,
+    # lamp 97%, ottoman 97%, handbag 92%, hat 93%, suitcase 96%). Types below
+    # ~85% stay optional so a missing colour escalates on its merits rather than
+    # failing schema validation outright -- the H10 failure mode.
+    # Synthetic fashion categories ONLY. synthgen always generates a colour, so
+    # requiring it is what lets the schema check catch `attribute_drop`
+    # (recall 1.000). Do not remove these -- it silently kills that signal.
+    #
+    # No ABO category is listed. Measured post-normalisation colour coverage
+    # across the two verticals runs 45.5% (hat) to 92.8% (wall_art); nothing is
+    # near guaranteed. Requiring it would mark every genuinely-clean-but-
+    # incomplete row as a schema violation, flag it as dirty, and tank
+    # precision -- the H10 failure mode, which was diagnosed as a `color`
+    # requirement that was too broad and is repeated by re-adding one here.
     required_for_categories: [shirts, shoes, bags, hats]
     type: enum
     # Omega_color: canonical values ONLY. A surface form that maps onto one of
@@ -45,8 +62,11 @@ attributes:
       teal: green
   material:
     type: enum
+    # `stone` added for the ABO furnishing verticals: 483 instances (5.8% of all
+    # material values there) and the single largest unresolved material.
     values: [cotton, leather, canvas, wool, denim, suede, polyester,
-             plastic, metal, glass, wood, ceramic, rubber, silicone, fabric, paper]  # ABO extensions
+             plastic, metal, glass, wood, ceramic, rubber, silicone, fabric, paper,
+             stone]
   pattern:
     type: enum
     values: [solid, striped, dotted]
@@ -57,9 +77,23 @@ attributes:
     type: free_text
     max_len: 60
 
-categories: [shirts, shoes, bags, hats, electronics, furniture, kitchen, home_decor]
+# Two ABO verticals (Collins et al., CVPR 2022), replacing the Kaggle Myntra set.
+# Per product type rather than per vertical: tau thresholds and the T2V candidate
+# pool are category-scoped, so a chair is only ever repaired with another chair.
+#   furnishing  : chair sofa table ottoman stool rug lamp light_fixture wall_art
+#   accessories : ring necklace earring handbag suitcase hat
+# The synthetic catalogue (tiger/data/synthgen.py) keeps its own four fashion
+# categories -- it is an independent detection benchmark, not part of this run.
+categories: [chair, sofa, table, ottoman, stool, rug, lamp, light_fixture, wall_art,
+             ring, necklace, earring, handbag, suitcase, hat,
+             shirts, shoes, bags, hats]
 
-# Cross-field constraints. Each rule: {if: {field: value}, then_not: {field: [values]}}
+# Cross-field constraints. Each rule: {if: {category: X}, allow: {field: [values]}}
+#
+# The two size rules below apply only to the synthetic fashion catalogue. The ABO
+# furnishing and accessory verticals carry no size enum, so they are unconstrained
+# here rather than carrying dead rules -- ABO listings state dimensions in free
+# text, which is not a finite domain a probe can enumerate.
 constraints:
   - name: shoes_have_numeric_sizes
     if: {category: shoes}

@@ -54,7 +54,10 @@ def test_both_listing_layouts_import(extension):
     df = import_abo(schema=load_schema("configs/schema.yaml"), max_items=10, seed=7,
                     **_fixture(extension))
     assert len(df) == 1
-    assert df.iloc[0]["category"] == "furniture"
+    # CATEGORY_MAP now maps each ABO product_type to its own TIGeR category
+    # rather than to a coarse vertical: tau thresholds and the T2V candidate
+    # pool are category-scoped, so a chair must only be repaired with a chair.
+    assert df.iloc[0]["category"] == "chair"
 
 
 def test_missing_listings_names_both_layouts():

@@ -1,5 +1,9 @@
-# Configuration for the tiger/ package pipeline (supersedes configs/config.yaml,
-# which is kept for the legacy scripts/ implementation).
+# Configuration for the tiger/ package pipeline. Single source of truth.
+#
+# configs/config.yaml was deleted: it belonged to the scripts/ MVP removed in
+# a7c1e72, was read by nothing, and still carried pre-fix values (F4's
+# copies_per_row: 15, IQR thresholds, the flat noise model) that read as live
+# calibration.
 
 data:
   sample_dir: "data/sample"            # bundled synthetic catalogue (committed)
@@ -81,7 +85,12 @@ arbiter:
     # ABO escalation rate was attributed to the `color` schema requirement (H10)
     # and to Arbiter underconfidence (H11); this gate sat upstream of both.
     allowed_categories: ["shirts", "shoes", "bags", "hats",
-                         "electronics", "furniture", "kitchen", "home_decor"]
+                         # ABO vertical A -- furnishing
+                         "chair", "sofa", "table", "ottoman", "stool",
+                         "rug", "lamp", "light_fixture", "wall_art",
+                         # ABO vertical B -- accessories
+                         "ring", "necklace", "earring",
+                         "handbag", "suitcase", "hat"]
     max_cost_units: 5.0
 
 verify:

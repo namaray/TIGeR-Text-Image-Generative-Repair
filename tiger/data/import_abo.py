@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+from tiger.data import abo_vocab
 from tiger.schema import Schema
 from tiger import text_views
 
@@ -31,99 +32,56 @@ log = logging.getLogger(__name__)
 # Category mapping: ABO product_type → TIGeR categories
 # We map into the 4 NEW non-fashion categories added to schema.yaml.
 # ---------------------------------------------------------------------------
-CATEGORY_MAP: dict[str, str] = {
-    # Electronics
-    "CELLULAR_PHONE_CASE": "electronics",
-    "HEADPHONES": "electronics",
-    "SPEAKER": "electronics",
-    "KEYBOARD": "electronics",
-    "MOUSE": "electronics",
-    "TABLET_CASE": "electronics",
-    "LAPTOP_CASE": "electronics",
-    "POWER_BANK": "electronics",
-    "EARPHONES": "electronics",
-    "SMARTWATCH": "electronics",
-    # Furniture
-    "TABLE": "furniture",
-    "CHAIR": "furniture",
-    "SOFA": "furniture",
-    "SHELF": "furniture",
-    "DESK": "furniture",
-    "BED_FRAME": "furniture",
-    "NIGHTSTAND": "furniture",
-    "BOOKCASE": "furniture",
-    "STOOL": "furniture",
-    "CABINET": "furniture",
-    # Kitchen
-    "MUG": "kitchen",
-    "WATER_BOTTLE": "kitchen",
-    "PLATE": "kitchen",
-    "BOWL": "kitchen",
-    "CUTTING_BOARD": "kitchen",
-    "PAN": "kitchen",
-    "POT": "kitchen",
-    "KETTLE": "kitchen",
-    "STORAGE_CONTAINER": "kitchen",
-    "COLANDER": "kitchen",
-    # Home decor
-    "LAMP": "home_decor",
-    "CANDLE": "home_decor",
-    "VASE": "home_decor",
-    "PICTURE_FRAME": "home_decor",
-    "CLOCK": "home_decor",
-    "MIRROR": "home_decor",
-    "THROW_PILLOW": "home_decor",
-    "BLANKET": "home_decor",
-    "RUG": "home_decor",
-    "CURTAIN": "home_decor",
+# Two verticals of the ABO catalogue, replacing the Kaggle Myntra fashion set.
+# Each ABO product_type maps to its own TIGeR category rather than to a coarse
+# vertical: per-category tau thresholds and the T2V candidate pool are both
+# category-scoped, so a chair should only ever be repaired with another chair.
+# The vertical grouping below is for reporting and the cross-domain contrast.
+#
+# Chosen on measured attribute coverage over the local ABO release, not on
+# intuition. Footwear was rejected despite being the largest fashion-like block:
+# 1,893 distinct colour strings and 8-28% material coverage would have left
+# material_flip unmeasurable, which is already the weakest signal in the paper.
+VERTICAL_A_FURNISHING = {
+    "CHAIR": "chair", "SOFA": "sofa", "TABLE": "table", "OTTOMAN": "ottoman",
+    "STOOL_SEATING": "stool", "RUG": "rug", "LAMP": "lamp",
+    "LIGHT_FIXTURE": "light_fixture", "WALL_ART": "wall_art",
 }
 
-# Colors in ABO that we can map into our schema's color domain
-# (schema already has standard colors; we only need to normalize ABO variants)
-COLOR_ALIASES: dict[str, str] = {
-    "silver": "gray",         # map metallic silver → gray (closest schema value)
-    "gold": "yellow",         # gold → yellow
-    "beige": "white",         # beige → white
-    "tan": "brown",
-    "navy": "blue",
-    "navy blue": "blue",
-    "teal": "green",
-    "turquoise": "green",
-    "ivory": "white",
-    "cream": "white",
-    "charcoal": "black",
-    "burgundy": "red",
-    "maroon": "red",
-    "violet": "purple",
-    "indigo": "blue",
-    "magenta": "pink",
-    "rose": "pink",
-    "coral": "orange",
-    "lime": "green",
-    "olive": "green",
-    "mint": "green",
-    "lavender": "purple",
-    "transparent": "white",
-    "clear": "white",
-    "multi": "multicolour",
-    "multicolor": "multicolour",
-    "multi-color": "multicolour",
-    "multicolored": "multicolour",
-    "assorted": "multicolour",
+VERTICAL_B_ACCESSORIES = {
+    "FINERING": "ring", "FINENECKLACEBRACELETANKLET": "necklace",
+    "FINEEARRING": "earring", "HANDBAG": "handbag",
+    "SUITCASE": "suitcase", "HAT": "hat",
 }
 
+CATEGORY_MAP: dict[str, str] = {**VERTICAL_A_FURNISHING, **VERTICAL_B_ACCESSORIES}
 
-def _extract_color(raw_color: str | None, schema: Schema) -> str | None:
-    """Normalise a raw ABO color string into a schema-valid value, or None."""
-    if not raw_color:
-        return None
-    c = str(raw_color).strip().lower()
-    c = COLOR_ALIASES.get(c, c)
-    # Try schema normalise (handles aliases defined in schema.yaml)
-    c = schema.normalize("color", c)
-    if schema.in_domain("color", c):
-        return c
-    return None
+VERTICALS: dict[str, set[str]] = {
+    "furnishing": set(VERTICAL_A_FURNISHING.values()),
+    "accessories": set(VERTICAL_B_ACCESSORIES.values()),
+}
+
+# CELLULAR_PHONE_CASE is deliberately absent: 64,853 listings, 44% of the whole
+# catalogue. Including it unsubsampled would swamp every other category. It is
+# better used as a dedicated class-imbalance stress test (reviewer_defense.md
+# Attack 9), not as background.
+
+def _extract_color(raw_color, schema: Schema) -> str | None:
+    """Free-text ABO colour -> Omega_color, or None when unresolvable.
+
+    Delegates to tiger.data.abo_vocab, which handles modifiers ("light grey"),
+    other languages ("blanco", "silber"), and explicit non-values ("no aplica").
+    Resolves 84.1% of colour instances in the two furnishing verticals; the
+    remainder is a long tail that returns None rather than a guess.
+    """
+    domain = {schema.normalize("color", v) for v in schema.domain("color")}
+    return abo_vocab.normalize_color(raw_color, domain)
+
+
+def _extract_material(raw_material, schema: Schema) -> str | None:
+    """Free-text ABO material -> Omega_material, or None. Resolves 82.0%."""
+    domain = {schema.normalize("material", v) for v in schema.domain("material")}
+    return abo_vocab.normalize_material(raw_material, domain)
 
 
 def import_abo(
@@ -133,6 +91,7 @@ def import_abo(
     out_dir: Path,
     schema: Schema,
     max_items: int = 3000,
+    max_per_category: int | None = 1200,
     seed: int = 7,
 ) -> pd.DataFrame:
     """
@@ -175,6 +134,10 @@ def import_abo(
 
     rows = []
     seen_products: set[str] = set()
+    # Per-category cap. ABO is dominated by a few product types; uncapped, one
+    # category sets the global tau and fills the T2V candidate pool for every
+    # other. None disables the cap.
+    per_cat: dict[str, int] = {}
 
     # Accept both layouts. The official ABO archive (abo-listings.tar from
     # s3://amazon-berkeley-objects/) ships listings_*.json.gz; the Kaggle mirror
@@ -213,6 +176,8 @@ def import_abo(
                 category = CATEGORY_MAP.get(product_type)
                 if category is None:
                     continue  # Skip unmapped product types
+                if max_per_category is not None and per_cat.get(category, 0) >= max_per_category:
+                    continue
         
                 # --- Title (English) ---
                 # ABO may store item_name as a JSON array of {"language_tag": ..., "value": ...}
@@ -235,18 +200,22 @@ def import_abo(
                 # --- Color ---
                 raw_color = row.get("color", row.get("colors", None))
                 color = _extract_color(_extract_english_value(raw_color), schema)
-                if color is None:
-                    continue  # color is required by schema
-        
-                attrs = {"color": color}
+
+                # Previously: `if color is None: continue`. That restricted the
+                # corpus to products whose colour string happened to resolve,
+                # biasing every colour-repair number measured on it -- and it
+                # meant `attribute_drop` noise was the only way a row could ever
+                # lack a colour. Colour is category-scoped in schema.yaml, so a
+                # chair without one is a valid record and a realistic one.
+                attrs = {}
+                if color is not None:
+                    attrs["color"] = color
         
                 # --- Material (optional, best-effort) ---
                 raw_material = row.get("material", row.get("fabric_type", None))
-                if raw_material:
-                    mat = str(_extract_english_value(raw_material) or "").lower().strip()
-                    mat = schema.normalize("material", mat)
-                    if schema.in_domain("material", mat):
-                        attrs["material"] = mat
+                mat = _extract_material(_extract_english_value(raw_material), schema)
+                if mat is not None:
+                    attrs["material"] = mat
         
                 seen_products.add(product_id)
                 rows.append({
@@ -260,6 +229,7 @@ def import_abo(
                     "is_image_missing": False,
                     "is_text_missing": False,
                 })
+                per_cat[category] = per_cat.get(category, 0) + 1
 
     if not rows:
         raise ValueError(
