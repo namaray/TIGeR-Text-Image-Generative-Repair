@@ -92,7 +92,10 @@ def apply_attr_patch(title: str, category: str, attrs: dict, patch: dict,
             # regenerate the title's colour mention rather than word-replacing
             # arbitrary text: replace only a colour word occurring OUTSIDE
             # brand names; if none exists, leave the title alone.
-            present = text_views.find_color_word(new_title, schema.domain("color"), brands)
+            # surface forms, not domain members (D5): a title reading "Navy
+            # Cotton Shirt" carries a colour word to rewrite even though `navy`
+            # is an alias. Scanning domain() alone would leave it stale.
+            present = text_views.find_color_word(new_title, schema.surface_forms("color"), brands)
             if present:
                 new_title = text_views.replace_color_word_safe(new_title, present, new_value, brands)
         changed.append(fld)
