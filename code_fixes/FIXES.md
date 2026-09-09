@@ -330,12 +330,23 @@ expected to be one of the larger single wins on Myntra-style imagery.
 
 **Sweep finding — blocked on data.** The mechanism is confirmed (skin hue sits
 inside both `orange` 14–40° and the `brown` rule's <50°), but the magnitude
-cannot be measured here. `synthgen.render_product_image` (`tiger/data/synthgen.py:122`)
+cannot be measured here.
+**Correction (2026-09-10): partially unblocked.** The claim that "the Fashion and
+ABO datasets are not in the repo" was wrong. The full official ABO release is on
+the dev machine at `data/raw/abo/` -- 398,212 images (matching the official
+count) and all 16 listings files. `data/raw/` is gitignored, which is why it was
+missed; not in the repo is not the same as not available.
+
+B1 specifically remains hard to measure on ABO: it is a furniture, electronics
+and homeware catalogue, so model shots with exposed skin are rare. The mechanism
+is real but ABO is the wrong corpus to size it on. This one still wants fashion
+imagery.
+ `synthgen.render_product_image` (`tiger/data/synthgen.py:122`)
 draws a flat-fill polygon on a 238–250 grey ground: no skin, no models. The
 Fashion and ABO datasets are not in the repo (C5/E6). Changing the estimator with
 no data that exercises the failure is editing blind.
 
-**Status:** BLOCKED on Fashion/ABO data being available locally (C5)
+**Status:** BLOCKED on fashion imagery specifically — ABO is available but is the wrong corpus for a skin-tone effect
 
 ---
 
@@ -357,7 +368,18 @@ but unfalsifiable on the only committed dataset: synthgen centres every shape
 within ±4% of frame centre at 36–44% scale, so the central box is *correct* there.
 A regression on the synthetic set would prove nothing either way.
 
-**Status:** BLOCKED on Fashion/ABO data being available locally (C5)
+**Correction (2026-09-10): partially unblocked.** The claim that "the Fashion and
+ABO datasets are not in the repo" was wrong. The full official ABO release is on
+the dev machine at `data/raw/abo/` -- 398,212 images (matching the official
+count) and all 16 listings files. `data/raw/` is gitignored, which is why it was
+missed; not in the repo is not the same as not available.
+
+**B2 is now testable and worth doing.** ABO is real product photography where the
+subject is not reliably centred or frame-filling -- a chair, a phone case and a
+rug occupy very different regions. The fixed central 70% box is exactly the wrong
+assumption for that corpus, and 398k images are available to measure it against.
+
+**Status:** UNBLOCKED — measurable on `data/raw/abo/`
 
 ---
 
@@ -406,7 +428,17 @@ box and compounding B2.
 **Sweep finding — blocked on data.** Confirmed in code, but synthgen emits square
 images, so the distortion is identically zero on the committed dataset.
 
-**Status:** BLOCKED on Fashion/ABO data being available locally (C5)
+**Correction (2026-09-10): partially unblocked.** The claim that "the Fashion and
+ABO datasets are not in the repo" was wrong. The full official ABO release is on
+the dev machine at `data/raw/abo/` -- 398,212 images (matching the official
+count) and all 16 listings files. `data/raw/` is gitignored, which is why it was
+missed; not in the repo is not the same as not available.
+
+**B5 is now testable.** Only 36.2% of ABO images are square (dimensions range
+21–2871 px), so `resize((size, size))` distorts nearly two thirds of the corpus
+before the centre crop is taken. This compounds B2 on the same data.
+
+**Status:** UNBLOCKED — measurable on `data/raw/abo/`
 
 ---
 
@@ -1055,7 +1087,7 @@ verified value is 0.983 (59/60), with `swap_image_same_category` as the separate
 | Section | Items | Done | Open | Parked / blocked / withdrawn |
 |---|---|---|---|---|
 | A. Measurement correctness | 9 | 8 | A2 (partial) | — |
-| B. Repair accuracy | 8 | 1 | B3, B7 | B1, B2, B5 blocked on data · B4 blocked on B0 · **B6 parked ⚑** |
+| B. Repair accuracy | 8 | 1 | B2, B3, B5, B7 | B1 needs fashion imagery · B4 blocked on B0 · **B6 parked ⚑** |
 | C. Config & reproducibility | 8 | 2 | C1, C2, C4, C5, C6, C7 | — |
 | D. Robustness & design | 13 | 3 | D1, D2, D8–D13 | **D4 parked ⚑** · D3 withdrawn |
 | E. Documentation | 12 | 0 | E1, E2, E4–E12 | E3 blocked on A1 |
