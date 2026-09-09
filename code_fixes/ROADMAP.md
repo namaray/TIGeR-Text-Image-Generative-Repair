@@ -29,7 +29,20 @@ them.
 
 ---
 
-## Phase 1 — Dataset migration (new; not yet in FIXES.md)
+## Phase 1 — Dataset migration ✅ DONE (`7541322`)
+
+Verified end to end against the local ABO release: 11,839 products across 15
+categories, balanced splits, 0 schema-invalid rows. 162 tests passing.
+
+Two things the restored suite caught during this phase, both H10-class:
+putting ABO types into `required_for_categories` on *raw* coverage (real
+post-normalisation coverage is 45.5–92.8%, so requiring colour would flag every
+clean-but-incomplete row as dirty), and dropping `shirts`, which would have
+silently killed `attribute_drop` detection in the synthetic run.
+
+Also removed a silent selection bias: the importer discarded any product whose
+colour string did not resolve — 22% of the corpus — which meant `attribute_drop`
+noise was the only way a row could ever lack a colour.
 
 Decision taken: drop the Kaggle Myntra fashion set, use **official ABO**
 (Collins et al., CVPR 2022) for both verticals.
@@ -60,8 +73,8 @@ Both notebooks are built and pushed.
 
 | | Task |
 |---|---|
-| 2.1 | `tiger_corrected_run.ipynb` — synthetic catalogue → detection numbers. Independent of the dataset switch; the verified 0.267→0.853 probe result lives here. |
-| 2.2 | `tiger_abo_corrected_run.ipynb` — ABO furnishing verticals → repair numbers. Needs Phase 1 first. |
+| 2.1 | `tiger_corrected_run.ipynb` — synthetic catalogue → **detection** numbers. Retitled and narrowed: its Fashion half is gone, since both real-data verticals now come from ABO. The verified 0.267→0.853 probe result lives here. |
+| 2.2 | `tiger_abo_corrected_run.ipynb` — the two ABO verticals → **repair** numbers. Phase 1 landed, so this is ready to run. |
 | 2.3 | Record the manifest. γ, both seeds, the allowlist and both model IDs are written to `run_manifest.json` so C1 cannot recur. |
 
 **Unblocks:** B4, E3, E8, and makes E1/E2/E4–E12 worth writing.

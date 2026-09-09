@@ -134,7 +134,9 @@ def cmd_import_abo(cfg: dict, args) -> None:
         images_dir=Path(args.images_dir).resolve(),
         out_dir=out_dir,
         schema=schema,
-        max_items=5000,
+        max_items=int(getattr(args, "max_items", None) or 20000),
+        max_per_category=(None if getattr(args, "max_per_category", None) == 0
+                          else int(getattr(args, "max_per_category", None) or 1200)),
         seed=int(cfg.get("noise", {}).get("seed", 7)),
     )
     print(df.groupby(["category", "split"]).size().to_string())
@@ -732,6 +734,12 @@ def main() -> None:
                     help="import-abo: path to ABO images.csv")
     ap.add_argument("--images-dir", default=None,
                     help="import-abo: root directory of ABO small JPEG images")
+    ap.add_argument("--max-items", type=int, default=None,
+                    help="import-abo/import-fashion: cap on total products imported")
+    ap.add_argument("--max-per-category", type=int, default=None,
+                    help="import-abo: cap per category (0 disables). ABO is dominated "
+                         "by a few product types; uncapped, one category sets the global "
+                         "tau and fills the T2V candidate pool for every other")
     args = ap.parse_args()
 
     cfg = load_cfg(args.config)
