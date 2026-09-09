@@ -13,6 +13,7 @@ Usage (in tiger.ipynb on Kaggle):
         --images-dir /kaggle/input/abo-images-small/images/small
 """
 
+import gzip
 import json
 import logging
 import random
@@ -175,9 +176,16 @@ def import_abo(
     rows = []
     seen_products: set[str] = set()
 
-    json_files = list(listings_dir.glob("listings_*.json"))
+    # Accept both layouts. The official ABO archive (abo-listings.tar from
+    # s3://amazon-berkeley-objects/) ships listings_*.json.gz; the Kaggle mirror
+    # had already decompressed them. H2 fixed a gzip-only reader by making it
+    # plain-only, which silently swapped one half of the problem for the other
+    # and made the canonical source unusable. Handle both.
+    json_files = sorted(listings_dir.glob("listings_*.json")) + \
+                 sorted(listings_dir.glob("listings_*.json.gz"))
     if not json_files:
-        raise FileNotFoundError(f"No listings_*.json files found in {listings_dir}")
+        raise FileNotFoundError(
+            f"No listings_*.json or listings_*.json.gz files found in {listings_dir}")
 
     log.info("Parsing ABO JSON listings from %d files...", len(json_files))
     
@@ -185,7 +193,8 @@ def import_abo(
         if len(rows) >= max_items:
             break
             
-        with open(json_file, 'rt', encoding='utf-8') as f:
+        opener = gzip.open if json_file.suffix == ".gz" else open
+        with opener(json_file, 'rt', encoding='utf-8') as f:
             for line in f:
                 if len(rows) >= max_items:
                     break
